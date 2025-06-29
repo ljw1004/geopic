@@ -16,7 +16,14 @@
       "Bash(tsc)",
       "Bash(grep:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)",
+      "Bash(git rm:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": []
   }

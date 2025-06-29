@@ -44,7 +44,7 @@ type AdvancedMarkerElement = google.maps.marker.AdvancedMarkerElement;
  */
 const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685'; // onedrive microsoft ID for my app, "GEOPIC", used to sign into Onedrive
 let ACCESS_TOKEN: string | null = null; // provided by OneDrive redirect as a query-param and stored in cookie
-let PHOTOS_FOLDER_ID: string | null = null; // initialized within onload() if we're logged in
+export let PHOTOS_FOLDER_ID: string | null = null; // initialized within onload() if we're logged in
 
 /**
  * GOOGLE MAPS INTEGRATION.
@@ -151,9 +151,6 @@ export function onLogoutClick(): void {
  * to cluster/render them. Will have to see.
  */
 async function renderGeo(driveItem: object | null, geoItems: GeoItem[] | undefined = undefined): Promise<void> {
-    if (String(1) === "1") {
-        return;
-    }
     for (const marker of MARKERS) {
         marker.map = null;
         (marker.content as Element)?.remove();
@@ -173,11 +170,9 @@ async function renderGeo(driveItem: object | null, geoItems: GeoItem[] | undefin
     document.getElementById('map')!.style.display = 'block';
 
     if (!geoItems) {
-        console.log("downloading...")
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to download geo.json: ${response.statusText}`);
         geoItems = await response.json() as GeoItem[];
-        console.log("downloaded.");
     }
 
     // The google maps library loads asynchronously. Here's how we await until it's finished loading:
@@ -259,16 +254,18 @@ function formatDuration(seconds: number): string {
  * Side-effect: it displays its progress to the user with the 'log' function.
  */
 async function walkFolderAsync(acc: GeoItem[], path: string[], folderId: string, tracking: { fetchesSoFar: number; startMs: number; bytesTotal: number; bytesSoFar: number }): Promise<void> {
-    const items = (await fetchAsync('GET', `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$top=10000&$expand=thumbnails&select=name,id,size,folder,file,location,photo,video,webUrl`)).value;
+    if (acc.length > 200) return;
+    if (path[0] === "todo") return;
+
+    const items = (await fetchAsync('GET', `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$top=10000&$expand=thumbnails&select=name,id,size,folder,file,location,photo,video,webUrl`)).value as any[];
     tracking.fetchesSoFar += 1;
     const elapsedSecs = (Date.now() - tracking.startMs) / 1000
     const elapsed = formatDuration(elapsedSecs);
     const remaining = formatDuration(elapsedSecs * (tracking.bytesTotal - tracking.bytesSoFar) / tracking.bytesSoFar);
     log(`Scanned ${acc.length} files in ${elapsed} [${Math.round(tracking.bytesSoFar / tracking.bytesTotal * 100)}%, ${tracking.fetchesSoFar}], ${remaining} remaining. ${path.join(' > ')}`);
 
-    if (acc.length > 2000) return;
 
-    for (const item of items) {
+    for (const item of items.reverse()) {
         const itemPath = [...path, item.name];
         if (item.folder) {
             await walkFolderAsync(acc, itemPath, item.id, tracking);

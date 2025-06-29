@@ -8,15 +8,13 @@
     <script type="module" src="./test.js"></script>
     <script type="module">
         import { onBodyLoad, onGenerateClick, onLoginClick, onLogoutClick } from './index.js';
-        import { testFetch, testCache, testBatch } from './test.js';
+        import { testFetch, testCache, testBatch, testWalk } from './test.js';
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('generate')?.addEventListener('click', onGenerateClick);
             document.getElementById('login')?.addEventListener('click', onLoginClick);
             document.getElementById('logout')?.addEventListener('click', onLogoutClick);
-            document.getElementById('testFetch')?.addEventListener('click', testFetch);
-            document.getElementById('testCache')?.addEventListener('click', testCache);
-            document.getElementById('testBatch')?.addEventListener('click', testBatch);
+            document.getElementById('testWalk')?.addEventListener('click', testWalk);
             onBodyLoad();
         });
     </script>
@@ -38,9 +36,7 @@
     </p>
 
     <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
-        <button id="testFetch">testFetch</button>
-        <button id="testCache">testCache</button>
-        <button id="testBatch">testBatch</button>
+        <button id="testWalk">testWalk</button>
     </div>
 
     <div id="log">

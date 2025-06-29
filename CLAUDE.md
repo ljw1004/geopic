@@ -41,7 +41,7 @@ When encountering type errors or uncertainty about external library APIs:
 
 ## Style for Claude's interactions
 
-## All code must be written with a high degree of rigor. That means:
+### All code must be written with a high degree of rigor. That means:
 - All non-trivial functions are documented to say what they do, what their input parameter values/types are, what their return is.
 - If functions have side effects then those are documented.
 - Where useful, function documentation includes explanation of INVARIANTS (pre-conditions, post-conditions, assumptions,
@@ -51,7 +51,7 @@ When encountering type errors or uncertainty about external library APIs:
   the invariants are still correct.
 - When we write code, we add comments to explain whenever code relies upon a documented assumption, or ensures a documented guarantee.
 
-## Be skeptical, not sycophantic
+### Be skeptical, not sycophantic
 Claude should approach all ideas (both those from the user and those from itself) with skepticism and rigor.
 Claude should actively think about flaws: loopholes, potential issues, limitations, invalid assumptions.
 If it hasn't thought of any flaws, then it should think harder to try to find some.
@@ -64,7 +64,7 @@ Claude should avoid complimentary language like "excellent!", "perfect!", "great
 Example: Instead of "That's an excellent approach!" say "This approach seems to avoid the naming conflict issue that was identified,
 and makes async loading explicit, but at the expense of being non-idiomatic".
 
-## Don't pre-emptively take action on type errors and lints.
+### Don't pre-emptively take action on type errors and lints.
 - If the user asks "what's wrong?" or "what's the correct way" -- explain the solution WITHOUT implementing it.
   Only change files if the user explicitly asks you make a change.
 - In all cases Claude should inform itself of typecheck and lint errors so it's aware of them.
@@ -78,6 +78,28 @@ and makes async loading explicit, but at the expense of being non-idiomatic".
 - The general principle is that the type system of a project is the single most important
   part of its architecture. Any changes to the type system require careful peer review
   with a human.
+
+## Brainstorming vs Implementation
+
+When the user is:
+- Describing problems or observations
+- Asking "how could we..." or "what if we..." or "let's think about" questions
+- Sharing performance data or analysis
+- Discussing tradeoffs or approaches
+
+DO NOT immediately start implementing solutions. Instead:
+- Be skeptical, think about flaws, and point them out if you see them
+- Suggest your own different ideas
+- Think further about considerations/problems/issues/concerns that haven't yet been raised.
+- Wait for explicit instruction to proceed with implementation
+
+Only take action when the user gives clear implementation instructions like:
+- "Please implement..."
+- "Go ahead and..."
+- "Could you please..."
+
+If you are unclear whether the user has given explicit go-ahead, then ask them:
+- "Shall I ...?"
 
 ## Caching Design (To Be Implemented)
 
@@ -145,7 +167,7 @@ type EndFolderWorkItem = {
   folderId: string,
   path: string[],
   state:
-    | { phase: 'NEED_WRITE', cacheData: CacheData }
+    | { phase: 'NEED_THUMBNAILS_AND_WRITE', cacheData: CacheData }
     | { phase: 'DONE' }
 }
 ```
@@ -167,10 +189,24 @@ type EndFolderWorkItem = {
    - After END_FOLDER completes, both OneDrive cache and in-memory cache contain folder's subtree data
    - Work items are immutable - we create new items with updated state
 
-4. **Dependency Tracking**:
+4. **Thumbnail Data URL Processing**:
+   - END_FOLDER NEED_THUMBNAILS_AND_WRITE phase extracts all thumbnail URLs from cacheData
+   - Concurrently fetches data URLs (limit ~10 concurrent to respect browser connection limits)
+   - Updates cacheData with data URLs, then writes cache and transitions to DONE
+   - TODO: Add retry logic for failed thumbnail fetches
+   - TODO: Handle individual thumbnail failures (skip items vs fail folder)
+   - TODO: Make concurrency limit configurable
+
+5. **Dependency Tracking**:
    - Track pending children for each folder
    - Only queue END_FOLDER when pendingChildren count reaches zero
 
-5. **Microsoft Graph Batch API**:
+6. **Microsoft Graph Batch API**:
    - Bundle up to 20 requests per batch call
-   - May need homogeneous batches if mixing operation types isn't supported
+   - Heterogeneous batches are supported (mixing different operation types)
+   - See `testBatch()` in test.ts for sample implementation and important post-processing steps
+
+7. **Implementation References**:
+   - `testCache()` in test.ts: Shows how to read/write to OneDrive application-local cache
+   - `testBatch()` in test.ts: Demonstrates Graph Batch API usage, heterogeneous calls, and response processing
+   - These functions contain key learnings and patterns to reference during implementation
