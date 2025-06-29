@@ -101,112 +101,13 @@ Only take action when the user gives clear implementation instructions like:
 If you are unclear whether the user has given explicit go-ahead, then ask them:
 - "Shall I ...?"
 
-## Caching Design (To Be Implemented)
+## Current Status & Next Steps
 
-### Overview
-To improve performance from ~15 minutes to seconds, we will cache geo data for each folder using OneDrive's app folder feature.
+### Recently Completed
+- Implemented first version of a faster batched+concurrent+cached "walk" algorithm in test.ts testWalk()
 
-### Cache Storage
-- Location: `/Apps/GEOPIC/cache/` (using OneDrive app folder via `/drive/special/approot`)
-- File naming: Sanitized folder path, e.g.:
-  - `Pictures.json` for the Pictures folder itself
-  - `Pictures-2023.json` for Pictures/2023/
-  - `Pictures-2023-Summer.json` for Pictures/2023/Summer/
-
-### Cache File Structure
-```json
-{
-  "folderMetadata": {
-    "id": "folder-drive-id",
-    "size": 123456789,
-    "lastModifiedDateTime": "2024-01-15T10:30:00Z",
-    "cTag": "ctag-value", 
-    "eTag": "etag-value"
-  },
-  "geoItems": [
-    {
-      "position": {"lat": 37.422, "lng": -122.084},
-      "date": "2023-06-15T14:30:00Z",
-      "thumbnailUrl": "...",
-      "webUrl": "...",
-      "aspectRatio": 1.33
-    }
-  ]
-}
-```
-
-### Caching Strategy
-1. **Redundant storage**: Each folder's cache contains ALL photos from its entire subtree
-   - A photo in A/B/c.jpg appears in caches for both A/ and A/B/
-2. **Validation**: Primary check is folder size; if unchanged, entire subtree is valid
-3. **Scanning algorithm**:
-   - Start with top-level folders
-   - If folder size matches cache, use cached data and skip all subfolders
-   - Only scan folders whose size has changed
-   - After scanning a changed folder, update its cache AND all ancestor folder caches
-
-### Queue-Based Implementation Design
-
-#### Work Queue Architecture
-Uses a queue-based approach with state machine work items to enable batching and clean separation of concerns.
-
-#### Work Item Types
-```javascript
-type StartFolderWorkItem = {
-  type: 'START_FOLDER',
-  folderId: string,
-  path: string[],
-  state: 
-    | { phase: 'NEED_CHILDREN' }
-    | { phase: 'NEED_CACHE', children: DriveItem[], folderMetadata: Metadata }
-    | { phase: 'READY', children: DriveItem[], folderMetadata: Metadata, cache?: CacheData }
-}
-
-type EndFolderWorkItem = {
-  type: 'END_FOLDER', 
-  folderId: string,
-  path: string[],
-  state:
-    | { phase: 'NEED_THUMBNAILS_AND_WRITE', cacheData: CacheData }
-    | { phase: 'DONE' }
-}
-```
-
-#### Processing Algorithm
-1. **Main Loop**: While queue has items:
-   - First try local computation (process READY items)
-   - Otherwise batch up to 20 API calls
-   - Update work items with responses and requeue
-
-2. **API Operations** (only 3 types needed):
-   - `GET /me/drive/items/{folderId}/children?$expand=thumbnails&select=...` - Gets both folder metadata AND children
-   - `GET /me/drive/special/approot:/cache/{filename}:/content` - Read cache
-   - `PUT /me/drive/special/approot:/cache/{filename}:/content` - Write cache
-
-3. **Key Invariants**:
-   - Every START_FOLDER will eventually be followed by END_FOLDER
-   - END_FOLDER only executes after all child END_FOLDER operations complete
-   - After END_FOLDER completes, both OneDrive cache and in-memory cache contain folder's subtree data
-   - Work items are immutable - we create new items with updated state
-
-4. **Thumbnail Data URL Processing**:
-   - END_FOLDER NEED_THUMBNAILS_AND_WRITE phase extracts all thumbnail URLs from cacheData
-   - Concurrently fetches data URLs (limit ~10 concurrent to respect browser connection limits)
-   - Updates cacheData with data URLs, then writes cache and transitions to DONE
-   - TODO: Add retry logic for failed thumbnail fetches
-   - TODO: Handle individual thumbnail failures (skip items vs fail folder)
-   - TODO: Make concurrency limit configurable
-
-5. **Dependency Tracking**:
-   - Track pending children for each folder
-   - Only queue END_FOLDER when pendingChildren count reaches zero
-
-6. **Microsoft Graph Batch API**:
-   - Bundle up to 20 requests per batch call
-   - Heterogeneous batches are supported (mixing different operation types)
-   - See `testBatch()` in test.ts for sample implementation and important post-processing steps
-
-7. **Implementation References**:
-   - `testCache()` in test.ts: Shows how to read/write to OneDrive application-local cache
-   - `testBatch()` in test.ts: Demonstrates Graph Batch API usage, heterogeneous calls, and response processing
-   - These functions contain key learnings and patterns to reference during implementation
+### TODO
+- Improve the testWalk() component: (1) handle failure, particularly rate-limiting on the thumbnail fetch requests, (2) display progress, (3) handle ACCESS_TOKEN expiry
+- Figure out realistic numbers for the entire cache strategy - in particular, total size for 60k photos, download time, google-maps-populate time
+- If it all works, then switch the product over to use the testWalk approach.
+- Add a sidebar for filtering, and change the map to fill the entire UI

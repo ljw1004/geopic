@@ -7,8 +7,6 @@
  *
  * For scanning, we expect about 30-40 top-level folders with 20-40 subfolders within each one.
  * It takes OneDrive about about 1s to retrieve a folder's child listing.
- *
- * TODO: implement all the sidebar
  */
 // Google Maps type imports
 /// <reference types="google.maps" />
