@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:learn.microsoft.com)",
+      "Bash(npm install)",
+      "Bash(npx tsc:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm install:*)",
+      "Bash(npx eslint:*)",
+      "Bash(rm:*)",
+      "Bash(rg:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(tsc)",
+      "Bash(grep:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "geopic",
+  "version": "1.0.0",
+  "description": "OneDrive GeoPic - Display geolocated photos on Google Maps",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@googlemaps/markerclusterer": "^2.5.3",
+    "@types/google.maps": "^3.58.1",
+    "@typescript-eslint/eslint-plugin": "^8.35.0",
+    "@typescript-eslint/parser": "^8.35.0",
+    "eslint": "^9.30.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "onedrive",
+    "geolocation",
+    "photos",
+    "maps"
+  ],
+  "author": "Lucian Wischik",
+  "license": "MIT"
+}

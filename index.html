@@ -1,0 +1,56 @@
+<html>
+
+<head>
+    <script async
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6u053DqLw1AeV23FNM9Tue-A9we6S01o&libraries=maps,marker&loading=async"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@googlemaps/markerclusterer/dist/index.min.js"></script>
+    <script type="module" src="./index.js"></script>
+    <script type="module" src="./test.js"></script>
+    <script type="module">
+        import { onBodyLoad, onGenerateClick, onLoginClick, onLogoutClick } from './index.js';
+        import { testFetch, testCache, testBatch } from './test.js';
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('generate')?.addEventListener('click', onGenerateClick);
+            document.getElementById('login')?.addEventListener('click', onLoginClick);
+            document.getElementById('logout')?.addEventListener('click', onLogoutClick);
+            document.getElementById('testFetch')?.addEventListener('click', testFetch);
+            document.getElementById('testCache')?.addEventListener('click', testCache);
+            document.getElementById('testBatch')?.addEventListener('click', testBatch);
+            onBodyLoad();
+        });
+    </script>
+</head>
+
+<body>
+
+    <h1>Onedrive GeoPic</h1>
+
+    <p>
+        <!-- Enabled by onload() when we're signed in (the firt one only if the file was found) -->
+        <a id="geo" style="display:none">OneDrive > Pictures > geo.json</a>
+        <button id="generate" style="display:none;">Generate geo.json ...</button>
+        <button id="logout" style="display:none;">Logout</button>
+
+        <!-- Enabled by onload() when we're not signed in -->
+        <button id="login" style="display:none;">Login...</button>
+
+    </p>
+
+    <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
+        <button id="testFetch">testFetch</button>
+        <button id="testCache">testCache</button>
+        <button id="testBatch">testBatch</button>
+    </div>
+
+    <div id="log">
+        This places a "geo.json" file in your Pictures folder, which lets you browse your pictures on a map.
+    </div>
+
+    <gmp-map id="map" center="37.422,-122.0840" zoom="4" map-id="5d7eeda627cfbcf67ae37695"
+        style="height: 600px; width: 100%; margin-top: 20px;"></gmp-map>
+
+
+</body>
+
+</html>
