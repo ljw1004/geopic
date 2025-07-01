@@ -23,7 +23,9 @@
       "Bash(git remote add:*)",
       "Bash(git push:*)",
       "Bash(git branch:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(tsc --noEmit)"
     ],
     "deny": []
   }

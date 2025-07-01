@@ -39,15 +39,22 @@ export function getCookie(name) {
 export function deleteCookie(name) {
     document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;`;
 }
+export class FetchError extends Error {
+    response;
+    constructor(response, text) {
+        super(`HTTP ${response.status} ${response.statusText}: ${text}`);
+        this.response = response;
+        Error.captureStackTrace(this, FetchError);
+    }
+}
 /**
  * Fetches a blob from a URL, and returns that blob as a data url.
  * This calls just `fetch(url)` with no ability to pass extra headers.
  */
 export async function fetchAsDataUrl(url) {
     const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch ${url}: ${response.status} ${await response.text()}`);
-    }
+    if (!response.ok)
+        throw new FetchError(response, await response.text());
     const blob = await response.blob();
     return new Promise((resolve) => {
         const reader = new FileReader();

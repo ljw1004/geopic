@@ -1,5 +1,5 @@
 import { fetchAsync } from './index.js';
-import { fetchAsDataUrl, postprocessBatchResponse } from './utils.js';
+import { blobToDataUrl, postprocessBatchResponse, FetchError } from './utils.js';
 
 /**
  * This object contains everything we we need for a folder to (1) cache and validate cache, (2) display thumbnails on a map.
@@ -142,26 +142,52 @@ function createGeoItem(driveItem: any): GeoItem {
     };
 }
 
+
 /**
- * Given a workitem, this concurrently fetches thumbnail URLs to replace them with data URLs.
+ * This fetches blobs from the given URLs. It retries upon "429 too busy", but all other result codes are returned to caller.
+ * It starts out aggressive with 6 concurrent requests (the maximum allowed by Chrome).
+ * If it gets "429 too busy" then it scales back to 1 concurrent request. If it still gets 429 then it delays 10s between requests.
+ * If it gets "200 success" then it cuts delay to 0. If it still gets 200 then it increases concurrency by 1 up to maximum 6.
+ * The result is either a Blob or a non-429 FetchError for each item, in the order they were provided.
  */
-async function resolveDataUrls(item: WorkItem): Promise<void> {
-    const THROTTLE = 10; // max concurrent fetches
-    let index = 0;
-    const promises = new Map<number, Promise<number>>();
-    while (index < item.data.geoItems.length) {
-        if (promises.size >= THROTTLE) promises.delete(await Promise.any(promises.values()));
-        const thisIndex = index++;
-        const geoItem = item.data.geoItems[thisIndex];
-        if (geoItem.thumbnailUrl.startsWith('data:')) continue;
-        const promise = fetchAsDataUrl(geoItem.thumbnailUrl).then(dataUrl => {
-            geoItem.thumbnailUrl = dataUrl;
-            return thisIndex;
-        });
-        promises.set(thisIndex, promise);
+async function rateLimitedBlobFetch<T>(urls: [string, T][]): Promise<[Blob | FetchError, T][]> {
+    // We will use indices into urls[] array. The indices in this array never change.
+    // results: has identical indices as urls[]
+    // queue: this array stores those indices, e.g. [0,2,1] means that indices 0,2,1 still have to be processed. They can and will end up out of order.
+    // fetches: this maps from an index, to a promise representing an outstanding fetch for that index's url
+    const results: [Blob | FetchError, T][] = urls.map(([_, t]) => [undefined as unknown as Blob, t]);
+    const queue: number[] = Array(urls.length).fill(0).map((_, i) => i);
+    const fetches: Map<number, Promise<{ r: Blob | FetchError, i: number }>> = new Map(); // uses the same index as its key
+    // Rate control invariant: (concurrencyLimit,retryDelay) is either (n,0) or (1,10) for 1<=n<=6.
+    let concurrencyLimit = 6;
+    let retryDelay = 0;
+
+    while (queue.length > 0 || fetches.size > 0) {
+        // Kick off fetches as needed
+        while (fetches.size < concurrencyLimit) {
+            const i = queue.shift();
+            if (i === undefined) break;
+            await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
+            fetches.set(i, fetch(urls[i][0]).then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })));
+        }
+        // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
+        const { i, r } = await Promise.any(fetches.values());
+        fetches.delete(i);
+
+        // Rate-limiting adjustment (up or down) and store/retry the result
+        if (r instanceof Blob) {
+            if (retryDelay > 0) retryDelay = 0; else if (concurrencyLimit < 6) concurrencyLimit++;
+            results[i][0] = r;
+        } else if (r instanceof FetchError && r.response.status == 429) {
+            if (concurrencyLimit > 1) concurrencyLimit = 1; else retryDelay = 10;
+            queue.push(i);
+        } else {
+            results[i][0] = r;
+        }
     }
-    await Promise.all(promises.values());
+    return results;
 }
+
 
 export async function testWalk(): Promise<WorkItem> {
     const toProcess: WorkItem[] = [];
@@ -179,12 +205,17 @@ export async function testWalk(): Promise<WorkItem> {
             const cache = item.responses[`cache-${item.data.id}`];
             const children = item.responses[`children-${item.data.id}`];
             if (cache.status === 200 && cache.body.size === item.data.size) {
-                stats.filesProgress += cache.body.geoItems.length;
+                stats.filesProgress += item.data.size;
                 stats.foldersFoundInCache++;
                 toProcess.unshift({ ...item, state: 'END', requests: [], responses: {} });
                 continue;
             }
 
+            // TODO: When cache is invalid but exists, we could still use cached geoItems
+            // for files that haven't changed (compare by file ID). This would reduce
+            // thumbnail fetches when only a few files in a folder have changed.
+
+            // Kick off subfolders, and initialize immediate children
             for (const child of children.body.value) {
                 if (child.folder) {
                     toFetch.push(createWorkItem(child, [...item.data.path, child.name]));
@@ -196,11 +227,21 @@ export async function testWalk(): Promise<WorkItem> {
                     }
                 }
             }
-            await resolveDataUrls(item);
+
+            // Resolve thumbnails for immediate children
+            const fetches = await rateLimitedBlobFetch(item.data.geoItems.filter(geo => !geo.thumbnailUrl.startsWith('data:')).map(gi => [gi.thumbnailUrl, gi]));
+            for (const [blobOrError, geoItem] of fetches) {
+                if (blobOrError instanceof Blob) {
+                    geoItem.thumbnailUrl = await blobToDataUrl(blobOrError);
+                } else {
+                    console.warn(`Failed to fetch thumbnail ${geoItem.thumbnailUrl}: ${blobOrError.message}`);
+                }
+            }
+
+            // Book-keeping
             stats.filesProgress += item.data.geoItems.length;
             stats.filesProcessed += item.data.geoItems.length;
             stats.foldersProcessed++;
-
             if (item.remainingSubfolders > 0) {
                 toFetch.sort((a, b) => cacheFilename(a.data.path).localeCompare(cacheFilename(b.data.path)));
                 waiting.set(cacheFilename(item.data.path), item);

@@ -1,5 +1,5 @@
 import { fetchAsync } from './index.js';
-import { fetchAsDataUrl, postprocessBatchResponse } from './utils.js';
+import { fetchAsDataUrl, postprocessBatchResponse, FetchError } from './utils.js';
 ;
 function cacheFilename(path) {
     if (path.length === 0)
@@ -73,27 +73,118 @@ function createGeoItem(driveItem) {
     };
 }
 /**
- * Given a workitem, this concurrently fetches thumbnail URLs to replace them with data URLs.
+ * Fetches thumbnail URLs and replaces them with data URLs using adaptive concurrency and rate control.
+ *
+ * Concurrency behavior:
+ * - Starts with 6 concurrent requests (browser's max concurrent connections)
+ * - On 429 response: immediately reduces concurrency to 1
+ * - On 429 with concurrency=1: introduces 10s retry delay
+ * - On 200 with retry delay: removes delay
+ * - On 200 with no delay and concurrency<6: increases concurrency by 1
+ *
+ * @param item - WorkItem containing geoItems with thumbnailUrls to resolve
+ * @returns Promise that resolves when all thumbnails are fetched
+ *
+ * INVARIANTS:
+ * - Pre-condition: item.data.geoItems contains items with valid thumbnailUrl strings
+ * - Post-condition: All non-data-URL thumbnailUrls are replaced with data URLs
+ * - Side effects: Modifies item.data.geoItems[].thumbnailUrl in place
  */
-async function resolveDataUrls(item) {
-    const THROTTLE = 10; // max concurrent fetches
-    let index = 0;
-    const promises = new Map();
-    while (index < item.data.geoItems.length) {
-        if (promises.size >= THROTTLE)
-            promises.delete(await Promise.any(promises.values()));
-        const thisIndex = index++;
-        const geoItem = item.data.geoItems[thisIndex];
-        if (geoItem.thumbnailUrl.startsWith('data:'))
-            continue;
-        const promise = fetchAsDataUrl(geoItem.thumbnailUrl).then(dataUrl => {
-            geoItem.thumbnailUrl = dataUrl;
-            return thisIndex;
-        });
-        promises.set(thisIndex, promise);
+async function resolveDataUrls2(item) {
+    const MIN_CONCURRENCY = 1;
+    const MAX_CONCURRENCY = 6; // Chrome's max concurrent connections per host
+    const RETRY_DELAY_MS = 10000; // 10 seconds
+    let concurrency = MAX_CONCURRENCY;
+    let retryDelay = 0; // milliseconds to wait before retrying after 429
+    // Create list of items that need processing (skip those already resolved)
+    const toProcess = [];
+    for (let i = 0; i < item.data.geoItems.length; i++) {
+        if (!item.data.geoItems[i].thumbnailUrl.startsWith('data:')) {
+            toProcess.push(i);
+        }
     }
-    await Promise.all(promises.values());
+    // Map of active promises, keyed by the index they're processing
+    const activePromises = new Map();
+    let processedIndex = 0; // Next index in toProcess to start
+    /**
+     * Fetches a single thumbnail with result status.
+     * Never throws - returns FetchResult with status field.
+     */
+    async function fetchOne(geoItemIndex) {
+        const geoItem = item.data.geoItems[geoItemIndex];
+        try {
+            const dataUrl = await fetchAsDataUrl(geoItem.thumbnailUrl);
+            geoItem.thumbnailUrl = dataUrl; // Update in place
+            return { geoItemIndex, status: 'success' };
+        }
+        catch (e) {
+            if (e instanceof FetchError && e.response.status === 429) {
+                return { geoItemIndex, status: 'retry', error: e };
+            }
+            // For non-429 errors, we treat as permanent failure
+            return { geoItemIndex, status: 'failure', error: e };
+        }
+    }
+    // Main processing loop
+    while (processedIndex < toProcess.length || activePromises.size > 0) {
+        // Start new requests up to current concurrency limit
+        while (processedIndex < toProcess.length && activePromises.size < concurrency) {
+            const itemIndex = toProcess[processedIndex++];
+            const promise = fetchOne(itemIndex);
+            activePromises.set(itemIndex, promise);
+        }
+        // Wait for any promise to complete
+        if (activePromises.size > 0) {
+            const result = await Promise.any(activePromises.values());
+            // Remove completed promise
+            for (const [key, promise] of activePromises.entries()) {
+                if (await Promise.race([promise.then(() => true), Promise.resolve(false)])) {
+                    activePromises.delete(key);
+                    break;
+                }
+            }
+            // Adjust concurrency and retry delay based on result
+            if (result.status === 'success') {
+                // Success handling
+                if (retryDelay > 0) {
+                    // Had a retry delay, remove it
+                    retryDelay = 0;
+                    console.log(`Removed retry delay after successful fetch`);
+                }
+                else if (concurrency < MAX_CONCURRENCY) {
+                    // No retry delay and below max concurrency, increase by 1
+                    concurrency++;
+                    console.log(`Increased concurrency to ${concurrency}`);
+                }
+            }
+            else if (result.status === 'retry') {
+                // 429 rate limit handling
+                if (concurrency > MIN_CONCURRENCY) {
+                    // Immediately reduce to minimum concurrency
+                    concurrency = MIN_CONCURRENCY;
+                    console.log(`Rate limited - reduced concurrency to ${concurrency}`);
+                }
+                else if (retryDelay === 0) {
+                    // Already at min concurrency, introduce retry delay
+                    retryDelay = RETRY_DELAY_MS;
+                    console.log(`Rate limited at min concurrency - added ${retryDelay}ms retry delay`);
+                }
+                // Re-queue the failed item for retry
+                toProcess.push(result.geoItemIndex);
+                // Apply retry delay if set
+                if (retryDelay > 0) {
+                    console.log(`Waiting ${retryDelay}ms before continuing...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                }
+            }
+            else {
+                // Permanent failure - log but continue processing others
+                console.error(`Failed to fetch thumbnail for item ${result.geoItemIndex}:`, result.error);
+            }
+        }
+    }
 }
+export { resolveDataUrls2 };
 export async function testWalk() {
     const toProcess = [];
     const toFetch = [];
@@ -108,11 +199,14 @@ export async function testWalk() {
             const cache = item.responses[`cache-${item.data.id}`];
             const children = item.responses[`children-${item.data.id}`];
             if (cache.status === 200 && cache.body.size === item.data.size) {
-                stats.filesProgress += cache.body.geoItems.length;
+                stats.filesProgress += item.data.size;
                 stats.foldersFoundInCache++;
                 toProcess.unshift({ ...item, state: 'END', requests: [], responses: {} });
                 continue;
             }
+            // TODO: When cache is invalid but exists, we could still use cached geoItems
+            // for files that haven't changed (compare by file ID). This would reduce
+            // thumbnail fetches when only a few files in a folder have changed.
             for (const child of children.body.value) {
                 if (child.folder) {
                     toFetch.push(createWorkItem(child, [...item.data.path, child.name]));
@@ -125,7 +219,7 @@ export async function testWalk() {
                     }
                 }
             }
-            await resolveDataUrls(item);
+            await resolveDataUrls2(item);
             stats.filesProgress += item.data.geoItems.length;
             stats.filesProcessed += item.data.geoItems.length;
             stats.foldersProcessed++;
