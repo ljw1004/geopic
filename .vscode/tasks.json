@@ -8,6 +8,24 @@
 			"problemMatcher": [],
 			"label": "npm: watch",
 			"detail": "tsc --watch"
+		},
+		{
+			"type": "npm",
+			"script": "build",
+			"group": "build",
+			"problemMatcher": [],
+			"label": "npm: build",
+			"detail": "tsc"
+		},
+		{
+			"label": "deploy to https://unto.me/geopic",
+			"type": "shell",
+			"command": "rsync --recursive --times --compress --progress --delete ./ lu@unto.me:/mnt/disks/pod7disk/www/untome/geopic --exclude='eslint.config.js' --include='*.js' --include='*.js.map' --include='*.ts' --include='*.html' --exclude='*'",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
 		}
 	]
 }

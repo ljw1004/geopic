@@ -8,13 +8,11 @@
     <script type="module" src="./test.js"></script>
     <script type="module">
         import { onBodyLoad, onGenerateClick, onLoginClick, onLogoutClick } from './index.js';
-        import { testFetch, testCache, testBatch, testWalk } from './test.js';
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('generate')?.addEventListener('click', onGenerateClick);
             document.getElementById('login')?.addEventListener('click', onLoginClick);
             document.getElementById('logout')?.addEventListener('click', onLogoutClick);
-            document.getElementById('testWalk')?.addEventListener('click', testWalk);
             onBodyLoad();
         });
     </script>
@@ -25,19 +23,10 @@
     <h1>Onedrive GeoPic</h1>
 
     <p>
-        <!-- Enabled by onload() when we're signed in (the firt one only if the file was found) -->
-        <a id="geo" style="display:none">OneDrive > Pictures > geo.json</a>
         <button id="generate" style="display:none;">Generate geo.json ...</button>
         <button id="logout" style="display:none;">Logout</button>
-
-        <!-- Enabled by onload() when we're not signed in -->
         <button id="login" style="display:none;">Login...</button>
-
     </p>
-
-    <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
-        <button id="testWalk">testWalk</button>
-    </div>
 
     <div id="log">
         This places a "geo.json" file in your Pictures folder, which lets you browse your pictures on a map.

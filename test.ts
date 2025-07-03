@@ -1,339 +1,330 @@
-import { fetchAsync } from './index.js';
-import { blobToDataUrl, postprocessBatchResponse, FetchError } from './utils.js';
 
 /**
- * This object contains everything we we need for a folder to (1) cache and validate cache, (2) display thumbnails on a map.
- * This object will be serialized to JSON and stored on OneDrive.
- */
-interface CacheData {
-    id: string; // OneDrive ID of this folder
-    path: string[]; // Used by both the workitem processing algorithm (to find parents), and for debugging
-    size: number; // for cache validation
-    lastModifiedDateTime: string; // for cache validation
-    cTag: string; // for cache validation
-    eTag: string; // for cache validation
-
-    geoItems: GeoItem[];
-}
-
-/**
- * An individual photo/video with geolocation data.
- */
-interface GeoItem {
-    position: {
-        lat: number;
-        lng: number;
-    };
-    date: string; // ISO date string for JSON serialization compatibility
-    thumbnailUrl: string;
-    id: string;
-    aspectRatio: number;
-}
-
-/**
- * Workitems are stored in these structures:
- * - A queue "ready" of workitems that need to be processed by the workitem-processor
- * - A queue "toFetch" of workitems that need the batch-processor to fetch their requests
- * - A dictionary "waiting" from path to workitems whose cache still needs geoItems from more subfolders
+ * OAuth2 Authorization Code Flow with PKCE Implementation
  * 
- * The overall cycle is:
- * 1. Place root "pictures" folder into toFetch queue, with requests for its cache and children
- * 2. [Processor] Process all items in "ready". If we processed an "END" item for the root folder, we're done.
- * 3. [Batcher] Remove as many items from "toFetch" as we can (up to max 20 requests), fetch responses, and push items into "ready"
- * 4. Repeat from step 2.
+ * This implementation provides:
+ * 1. Authorization code flow with PKCE for SPAs
+ * 2. Automatic token refresh using refresh tokens
+ * 3. Secure token storage in localStorage
  * 
- * The cycle for an individual workitem (and the work done by the processor) is this:
- * 1. It was placed in "toFetch" with state=START and requests for its cache and children
- * 2. The batcher resolved those requests and placed it in "ready" with responses
- * 3. The processor takes a START item with responses (and no requests) and does this:
- *    1. If cache agrees with metadata, pushes self in state END into "ready" and is done. Otherwise...
- *    2. For all immediate children, concurrently fetches their thumbnails and places them in cache.geoItems
- *    3. If there are no subfolders, push self in state END into "toFetch" with a request to upload cache, and we're done. Otherwise...
- *    4. Place self in "waiting" with state=END, keyed by self's path, with remainingSubfolders set to the number of subfolders
- * 4. If we'd placed self in END with a request to upload cache, the batcher does so, and places self in "ready" with response.
- * 5. The processor takes an END item with no requests and does this:
- *    1. Figure out the path to the parent. If there is none, we're finished the overall cycle!
- *    2. Look up the parent in "waiting". It will necessarily be there.
- *    3. Append self's cache.geoItems to the parent's cache.geoItems, and decrement the parent's remainingSubfolders count.
- *    4. If parent has no remaining subfolders, remove from "waiting", and push into "toFetch" with a request to upload it's cache.
+ * INVARIANTS:
+ * - PKCE verifier is cryptographically random and never exposed to the authorization server until code exchange
+ * - Refresh tokens expire after 24 hours for SPAs
+ * - Authorization codes can only be used once
  */
-interface WorkItem {
-    state: 'START' | 'END';
-    requests: any[]; // requests needed before we can proceed; added by whoever created the workitem, removed by batch-API
-    responses: { [id: string]: any }; // reponses; added by batch-API, removed by the workitem processor
-    data: CacheData; // initialized upon creation with an empty list of geoItems; processor will append to the list
-    remainingSubfolders: number; // if cache/geoItems is incomplete, this is how many subfolders it still needs
-};
 
-function cacheFilename(path: string[]): string {
-    if (path.length === 0) return 'all.json';
-    return path.join('-').replace(/[^a-zA-Z0-9-]/g, '_') + '.json';
+const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685';
+const REDIRECT_URI = window.location.origin + window.location.pathname;
+const TENANT_ID = 'common'; // Use 'common' for multi-tenant, or specific tenant ID
+const SCOPES = 'files.readwrite offline_access'; // offline_access needed for refresh tokens
+
+interface TokenResponse {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+    token_type: string;
 }
 
-
-/**
- * Creates a START WorkItem with two requests, one for children and one for cache.
- */
-function createWorkItem(driveItem: any, path: string[]): WorkItem {
-    return {
-        state: 'START',
-        requests: [
-            {
-                id: `children-${driveItem.id}`,
-                method: 'GET',
-                url: `/me/drive/items/${driveItem.id}/children?$top=10000&$expand=thumbnails&select=name,id,ctag,etag,size,lastModifiedDateTime,folder,file,location,photo,video`
-            },
-            {
-                id: `cache-${driveItem.id}`,
-                method: 'GET',
-                url: `/me/drive/special/approot:/${cacheFilename(path)}:/content`
-            }
-        ],
-        responses: {},
-        data: {
-            id: driveItem.id,
-            path,
-            size: driveItem.size,
-            lastModifiedDateTime: driveItem.lastModifiedDateTime,
-            cTag: driveItem.cTag,
-            eTag: driveItem.eTag,
-            geoItems: [],
-        },
-        remainingSubfolders: 0
-    };
+interface StoredTokenData {
+    access_token: string;
+    refresh_token?: string;
+    expires_at: number; // Unix timestamp when token expires
 }
 
 /**
- * Creates an END workitem with one request, to write the cache
+ * Generates a cryptographically random string for PKCE
+ * @param length The length of the random string
+ * @returns Base64URL encoded random string
  */
-function createEndWorkItem(item: WorkItem): WorkItem {
-    return {
-        ...item, state: 'END', responses: {}, requests: [
-            {
-                id: `write-${item.data.id}`,
-                method: 'PUT',
-                url: `/me/drive/special/approot:/${cacheFilename(item.data.path)}:/content`,
-                // I experimentally found weird bugs and workarounds in the batch API (not the individual API):
-                // - If I upload an object with content-type application/json, OneDrive claims success but stores a file of size 0
-                // - If I upload a string, or base64-encoded json string, with application/json, OneDrive fails with "Invalid json body"
-                // - If I upload a base64-encoded json string as text/plain, OneDrive succeeds and stores the file, and subsequent download has content-type application/json
-                body: btoa(JSON.stringify(item.data)),
-                headers: { 'Content-Type': 'text/plain' }
-            }
+function generateRandomString(length: number): string {
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
+    return base64UrlEncode(array);
+}
 
-        ]
+/**
+ * Base64URL encode (without padding)
+ */
+function base64UrlEncode(buffer: Uint8Array): string {
+    const base64 = btoa(String.fromCharCode(...buffer));
+    return base64
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+}
+
+/**
+ * Generates PKCE challenge from verifier
+ * @param verifier The PKCE verifier
+ * @returns Base64URL encoded SHA256 hash of verifier
+ */
+async function generatePKCEChallenge(verifier: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return base64UrlEncode(new Uint8Array(digest));
+}
+
+/**
+ * Initiates OAuth2 authorization code flow with PKCE
+ * Stores PKCE verifier in sessionStorage and redirects to Microsoft login
+ */
+export async function initiateCodeFlow(): Promise<void> {
+    // Generate PKCE verifier and challenge
+    const codeVerifier = generateRandomString(128);
+    const codeChallenge = await generatePKCEChallenge(codeVerifier);
+    
+    // Store verifier for later use
+    sessionStorage.setItem('pkce_verifier', codeVerifier);
+    
+    // Build authorization URL
+    const authUrl = new URL(`https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize`);
+    authUrl.searchParams.append('client_id', CLIENT_ID);
+    authUrl.searchParams.append('response_type', 'code');
+    authUrl.searchParams.append('redirect_uri', REDIRECT_URI);
+    authUrl.searchParams.append('response_mode', 'query');
+    authUrl.searchParams.append('scope', SCOPES);
+    authUrl.searchParams.append('code_challenge', codeChallenge);
+    authUrl.searchParams.append('code_challenge_method', 'S256');
+    
+    // Redirect to authorization endpoint
+    window.location.href = authUrl.toString();
+}
+
+/**
+ * Handles OAuth2 callback and exchanges authorization code for tokens
+ * Should be called on page load if authorization code is present in URL
+ * @returns true if successfully handled callback, false otherwise
+ */
+export async function handleCodeFlowCallback(): Promise<boolean> {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const error = urlParams.get('error');
+    
+    if (error) {
+        console.error('OAuth error:', error, urlParams.get('error_description'));
+        return false;
+    }
+    
+    if (!code) {
+        return false;
+    }
+    
+    // Get PKCE verifier
+    const codeVerifier = sessionStorage.getItem('pkce_verifier');
+    if (!codeVerifier) {
+        console.error('No PKCE verifier found');
+        return false;
+    }
+    
+    try {
+        // Exchange code for tokens
+        const tokens = await exchangeCodeForTokens(code, codeVerifier);
+        
+        // Store tokens
+        storeTokens(tokens);
+        
+        // Clean up
+        sessionStorage.removeItem('pkce_verifier');
+        
+        // Remove code from URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        console.log('Successfully authenticated with code flow');
+        return true;
+    } catch (error) {
+        console.error('Failed to exchange code for tokens:', error);
+        return false;
     }
 }
 
-
 /**
- * Creates a GeoItem. But with its thumbnailDataUrl not yet fetched (it's just the URL of the thumbnail content).
+ * Exchanges authorization code for access and refresh tokens
+ * @param code The authorization code
+ * @param codeVerifier The PKCE verifier
+ * @returns Token response
  */
-function createGeoItem(driveItem: any): GeoItem {
-    return {
-        id: driveItem.id,
-        position: {
-            lat: Math.round(driveItem.location.latitude * 100000) / 100000,
-            lng: Math.round(driveItem.location.longitude * 100000) / 100000,
+async function exchangeCodeForTokens(code: string, codeVerifier: string): Promise<TokenResponse> {
+    const tokenUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
+    
+    const params = new URLSearchParams();
+    params.append('client_id', CLIENT_ID);
+    params.append('scope', SCOPES);
+    params.append('code', code);
+    params.append('redirect_uri', REDIRECT_URI);
+    params.append('grant_type', 'authorization_code');
+    params.append('code_verifier', codeVerifier);
+    
+    const response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
         },
-        date: driveItem.photo.takenDateTime,
-        thumbnailUrl: driveItem.thumbnails[0].small.url,
-        aspectRatio: Math.round(driveItem.thumbnails[0].small.width / driveItem.thumbnails[0].small.height * 100) / 100,
-    };
+        body: params.toString(),
+    });
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Token exchange failed: ${errorText}`);
+    }
+    
+    return await response.json();
 }
-
 
 /**
- * This fetches blobs from the given URLs. It retries upon "429 too busy", but all other result codes are returned to caller.
- * It starts out aggressive with 6 concurrent requests (the maximum allowed by Chrome).
- * If it gets "429 too busy" then it scales back to 1 concurrent request. If it still gets 429 then it delays 10s between requests.
- * If it gets "200 success" then it cuts delay to 0. If it still gets 200 then it increases concurrency by 1 up to maximum 6.
- * The result is either a Blob or a non-429 FetchError for each item, in the order they were provided.
+ * Stores tokens in localStorage with expiration time
+ * @param tokens The token response from OAuth2 server
  */
-async function rateLimitedBlobFetch<T>(urls: [string, T][]): Promise<[Blob | FetchError, T][]> {
-    // We will use indices into urls[] array. The indices in this array never change.
-    // results: has identical indices as urls[]
-    // queue: this array stores those indices, e.g. [0,2,1] means that indices 0,2,1 still have to be processed. They can and will end up out of order.
-    // fetches: this maps from an index, to a promise representing an outstanding fetch for that index's url
-    const results: [Blob | FetchError, T][] = urls.map(([_, t]) => [undefined as unknown as Blob, t]);
-    const queue: number[] = Array(urls.length).fill(0).map((_, i) => i);
-    const fetches: Map<number, Promise<{ r: Blob | FetchError, i: number }>> = new Map(); // uses the same index as its key
-    // Rate control invariant: (concurrencyLimit,retryDelay) is either (n,0) or (1,10) for 1<=n<=6.
-    let concurrencyLimit = 6;
-    let retryDelay = 0;
-
-    while (queue.length > 0 || fetches.size > 0) {
-        // Kick off fetches as needed
-        while (fetches.size < concurrencyLimit) {
-            const i = queue.shift();
-            if (i === undefined) break;
-            await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
-            fetches.set(i, fetch(urls[i][0]).then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })));
-        }
-        // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
-        const { i, r } = await Promise.any(fetches.values());
-        fetches.delete(i);
-
-        // Rate-limiting adjustment (up or down) and store/retry the result
-        if (r instanceof Blob) {
-            if (retryDelay > 0) retryDelay = 0; else if (concurrencyLimit < 6) concurrencyLimit++;
-            results[i][0] = r;
-        } else if (r instanceof FetchError && r.response.status == 429) {
-            if (concurrencyLimit > 1) concurrencyLimit = 1; else retryDelay = 10;
-            queue.push(i);
-        } else {
-            results[i][0] = r;
-        }
+function storeTokens(tokens: TokenResponse): void {
+    const tokenData: StoredTokenData = {
+        access_token: tokens.access_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000),
+    };
+    
+    if (tokens.refresh_token !== undefined) {
+        tokenData.refresh_token = tokens.refresh_token;
     }
-    return results;
+    
+    localStorage.setItem('oauth_tokens', JSON.stringify(tokenData));
 }
 
+/**
+ * Gets current access token, refreshing if necessary
+ * @returns Valid access token or null if unable to obtain one
+ */
+export async function getAccessToken(): Promise<string | null> {
+    const storedData = localStorage.getItem('oauth_tokens');
+    if (!storedData) {
+        return null;
+    }
+    
+    const tokenData: StoredTokenData = JSON.parse(storedData);
+    
+    // Check if token is still valid (with 5 minute buffer)
+    if (Date.now() < tokenData.expires_at - 300000) {
+        return tokenData.access_token;
+    }
+    
+    // Token expired, try to refresh
+    if (!tokenData.refresh_token) {
+        console.log('No refresh token available');
+        return null;
+    }
+    
+    try {
+        const tokens = await refreshAccessToken(tokenData.refresh_token);
+        storeTokens(tokens);
+        return tokens.access_token;
+    } catch (error) {
+        console.error('Failed to refresh token:', error);
+        localStorage.removeItem('oauth_tokens');
+        return null;
+    }
+}
 
-export async function testWalk(): Promise<WorkItem> {
-    const toProcess: WorkItem[] = [];
-    const toFetch: WorkItem[] = [];
-    const waiting = new Map<string, WorkItem>();
-    const stats = { foldersFoundInCache: 0, foldersProcessed: 0, filesProcessed: 0, filesProgress: 0, bytesProgress: 0, bytesTotal: 0, startTime: Date.now() };
+/**
+ * Refreshes access token using refresh token
+ * @param refreshToken The refresh token
+ * @returns New token response
+ */
+async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
+    const tokenUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
+    
+    const params = new URLSearchParams();
+    params.append('client_id', CLIENT_ID);
+    params.append('scope', SCOPES);
+    params.append('refresh_token', refreshToken);
+    params.append('grant_type', 'refresh_token');
+    
+    const response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params.toString(),
+    });
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Token refresh failed: ${errorText}`);
+    }
+    
+    return await response.json();
+}
 
-    const rootDriveItem = await fetchAsync('GET', `https://graph.microsoft.com/v1.0/me/drive/special/photos`);
-    toFetch.push(createWorkItem(rootDriveItem, []));
-    stats.bytesTotal = rootDriveItem.size;
+/**
+ * Logs out by clearing stored tokens
+ */
+export function logout(): void {
+    localStorage.removeItem('oauth_tokens');
+    sessionStorage.removeItem('pkce_verifier');
+}
 
-    while (true) {
-        const item = toProcess.shift();
-        if (item && item.state === 'START') {
-            const cache = item.responses[`cache-${item.data.id}`];
-            const children = item.responses[`children-${item.data.id}`];
-            if (cache.status === 200 && cache.body.size === item.data.size) {
-                stats.filesProgress += item.data.size;
-                stats.foldersFoundInCache++;
-                toProcess.unshift({ ...item, state: 'END', requests: [], responses: {} });
-                continue;
-            }
-
-            // TODO: When cache is invalid but exists, we could still use cached geoItems
-            // for files that haven't changed (compare by file ID). This would reduce
-            // thumbnail fetches when only a few files in a folder have changed.
-
-            // Kick off subfolders, and initialize immediate children
-            for (const child of children.body.value) {
-                if (child.folder) {
-                    toFetch.push(createWorkItem(child, [...item.data.path, child.name]));
-                    item.remainingSubfolders++;
-                } else if (child.file) {
-                    stats.bytesProgress += child.size;
-                    if (child.location && child.thumbnails?.at(0)?.small?.url && child.photo?.takenDateTime) {
-                        item.data.geoItems.push(createGeoItem(child));
-                    }
+/**
+ * Test function to demonstrate usage
+ */
+export async function testCodeFlow(): Promise<void> {
+    // Check if we're handling a callback
+    const handled = await handleCodeFlowCallback();
+    if (handled) {
+        // Successfully authenticated, try to get access token
+        const token = await getAccessToken();
+        if (token) {
+            console.log('Got access token:', token.substring(0, 20) + '...');
+            
+            // Test API call
+            const response = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
                 }
-            }
-
-            // Resolve thumbnails for immediate children
-            const fetches = await rateLimitedBlobFetch(item.data.geoItems.filter(geo => !geo.thumbnailUrl.startsWith('data:')).map(gi => [gi.thumbnailUrl, gi]));
-            for (const [blobOrError, geoItem] of fetches) {
-                if (blobOrError instanceof Blob) {
-                    geoItem.thumbnailUrl = await blobToDataUrl(blobOrError);
-                } else {
-                    console.warn(`Failed to fetch thumbnail ${geoItem.thumbnailUrl}: ${blobOrError.message}`);
-                }
-            }
-
-            // Book-keeping
-            stats.filesProgress += item.data.geoItems.length;
-            stats.filesProcessed += item.data.geoItems.length;
-            stats.foldersProcessed++;
-            if (item.remainingSubfolders > 0) {
-                toFetch.sort((a, b) => cacheFilename(a.data.path).localeCompare(cacheFilename(b.data.path)));
-                waiting.set(cacheFilename(item.data.path), item);
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Photos folder:', data);
             } else {
-                toFetch.unshift(createEndWorkItem(item));
+                console.error('API call failed:', await response.text());
             }
-        } else if (item && item.state === 'END') {
-            console.log(`[${Math.round(stats.bytesProgress / stats.bytesTotal * 100)}%] - in this run ${stats.foldersFoundInCache} folders from cache, ${stats.foldersProcessed} folders processed, ${stats.filesProcessed} files processed - ${item.data.path.join('/')}`);
-            if (item.data.path.length === 0) {
-                console.log("DONE!!!");
-                return item; // we've done the root folder!
-            }
-            const parentName = cacheFilename(item.data.path.slice(0, -1))
-            const parent = waiting.get(parentName)!;
-            parent.data.geoItems.push(...item.data.geoItems);
-            parent.remainingSubfolders--;
-            if (parent.remainingSubfolders === 0) {
-                waiting.delete(parentName);
-                toFetch.unshift(createEndWorkItem(parent));
-            }
+        }
+    } else {
+        // Check if we have a valid token
+        const token = await getAccessToken();
+        if (token) {
+            console.log('Already authenticated with valid token');
         } else {
-            const thisFetch: WorkItem[] = [];
-            const requests: any[] = [];
-            while (toFetch.length > 0 && requests.length < 18) {
-                const item = toFetch.shift()!;
-                requests.push(...item.requests);
-                thisFetch.push(item);
-            }
-            const response = await fetchAsync('POST', 'https://graph.microsoft.com/v1.0/$batch', JSON.stringify({ requests }), 'application/json');
-            await postprocessBatchResponse(response);
-            for (const r of await response.responses) {
-                const item = thisFetch.find(item => item.requests.some(req => req.id === r.id))!;
-                item.responses[r.id] = r;
-            }
-            thisFetch.forEach(item => item.requests = []);
-            toProcess.push(...thisFetch);
+            console.log('Not authenticated, initiate login with: initiateCodeFlow()');
         }
     }
-
 }
 
-export async function testFetch(): Promise<void> {
-    const r = await fetchAsync('GET',
-        `https://graph.microsoft.com/v1.0/me/drive/items/92917DCE344E62BC!342443/children?$expand=thumbnails&$select=id,name,size,folder,lastModifiedDateTime,cTag,eTag`);
-    console.log(JSON.stringify(r, null, 2));
+/**
+ * Returns a 20-character-wide progress bar string that looks like this:
+ *   "===-->            "
+ *   "==---15%-->       "
+ *   "=======12%==>     "
+ * There are '=' characters up to the count1/total fraction of the bar
+ * There are '-' characters from there to the (count1+count2)/total fraction of the bar
+ * There's a '>' character after all of them
+ * If there are at least 6 '=' or '-' characters, then a two-digit percentage replaces near the end.
+ */
+function progressBar(count1: number, count2: number, total: number): string {
+    const barWidth = 20;
+    const equalsCount = Math.floor(count1 / total * barWidth);
+    const dashCount = Math.floor((count1 + count2) / total * barWidth) - equalsCount;
+    const emptyCount = barWidth - equalsCount - dashCount - 1;
+    let bar = '='.repeat(equalsCount) + '-'.repeat(dashCount) + '>' + ' '.repeat(emptyCount);
+
+    if (equalsCount + dashCount >= 5) {
+        const pct = Math.floor((count1 + count2) / total * 100).toString().padStart(2, '0') + '%';
+        const pos = equalsCount + dashCount - 4;
+        bar = bar.substring(0, pos) + pct + bar.substring(pos + pct.length);
+    }
+
+    return bar;
 }
 
-export async function testCache(): Promise<any> {
-    const appFolderResponse = await fetchAsync('GET', 'https://graph.microsoft.com/v1.0/me/drive/special/approot');
-    console.log('App folder ID:', appFolderResponse.id);
-
-    const data = { foo: 1, bar: { a: 2, b: 3 } };
-    const writeResponse = await fetchAsync('PUT',
-        `https://graph.microsoft.com/v1.0/me/drive/special/approot:/file1.json:/content`, JSON.stringify(data), 'application/json'
-    );
-    console.log(JSON.stringify(writeResponse, null, 2));
-
-    const readResponse = await fetchAsync('GET',
-        `https://graph.microsoft.com/v1.0/me/drive/special/approot:/file1.json:/content`);
-    console.log(JSON.stringify(readResponse, null, 2));
+export function testProgress(): void {
+    console.log(progressBar(30, 0, 100));
+    console.log(progressBar(20, 10, 100));
+    console.log(progressBar(60, 30, 100));
 }
-
-export async function testBatch(): Promise<any> {
-    const folderIds: string[] = [
-        "92917DCE344E62BC!342443",
-        "92917DCE344E62BC!324268",
-        "92917DCE344E62BC!324269",
-        "92917DCE344E62BC!76025",
-        "92917DCE344E62BC!325738",
-    ];
-    const readFiles: string[] = ["file1.json", "file2.json"];
-    const writeFiles: string[] = ["file3.json", "file4.json"];
-    const folderRequests = folderIds.map((id: string) => ({
-        id: `folder-${id}`,
-        method: 'GET',
-        url: `/me/drive/items/${id}`
-    }));
-    const readRequests = readFiles.map((name: string) => ({
-        id: `read-${name}`,
-        method: 'GET',
-        url: `/me/drive/special/approot:/${name}:/content`
-    }));
-    const writeRequests = writeFiles.map((name: string) => ({
-        id: `write-${name}`,
-        method: 'PUT',
-        url: `/me/drive/special/approot:/${name}:/content`,
-        body: btoa(JSON.stringify({ foo: 1, bar: 2 })),
-        headers: { 'Content-Type': 'text/plain' } // OneDrive bug workaround
-    }));
-
-    const batch1Response = await fetchAsync('POST', 'https://graph.microsoft.com/v1.0/$batch',
-        JSON.stringify({ requests: [...readRequests, ...writeRequests, ...folderRequests] }), 'application/json');
-    console.log(JSON.stringify(await postprocessBatchResponse(batch1Response), null, 2));
-}
-

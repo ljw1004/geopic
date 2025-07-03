@@ -8,36 +8,15 @@ GeoPic is a single-page web application that combines OneDrive photos with Googl
 
 ## Architecture
 
-- **Typescript without webpack**: All code is `index.ts` and `index.html`. (There's also `test.ts` for development-time testing; it will be deleted). The typescript files get turned into js, which is included via script tags.
-- **External dependencies**: Loaded via CDN (Google Maps API, MarkerClusterer)
-- **OneDrive integration and authentication**: Uses Microsoft Graph API for photo access. Uses OAuth2 token flow with redirect back to index.html
-
-### OneDrive Authentication
-- Client ID: `e5461ba2-5cd4-4a14-ac80-9be4c017b685`
-- OAuth2 redirect flow returns to index.html with access token in URL hash
-- Access token stored in global `ACCESS_TOKEN` variable
-
-### Data Structure
-- `geo.json` format: `[{id, lat, long, date}, ...]`
-- Coordinates rounded to 5 decimal places
-- Stored in user's OneDrive Pictures folder
-
-### Google Maps Integration
-- Script tag already included for MarkerClusterer
-- Needs Google Maps API key to be added
-- Will use AdvancedMarkerElement for photo markers
+- **Typescript without webpack**: All code is in `index.html` for the page, `index.ts` for the main logic, `utils.ts` for a few common libraries, `geoitem.ts` for datatype and logic concerning how OneDrive scrapes photos. There's also `test.ts` for prototypes.
+- **Minimal dependencies**
 
 ## Development Notes
 
-- Build process: `tsc` or `tsc --watch` to compile TypeScript to JavaScript
-- Test by running the build, then opening https://unto.me/geopic in a browser; use F12 debugging within the browser to debug.
-- OneDrive integration can never be done locally; it must done via that url on that domain.
+- Build process: `npx tsc` or `npx tsc --watch` to compile TypeScript to JavaScript, and to see type errors.
+- Test locally using localhost... (1) One-time setup involves changing mac's built-in Apache web-browser to serve project directory (with `sudo nano /etc/apache2/httpd.conf` which Claude can't do because it requires the user to enter sudo password, and set the DocumentRoot and Directory directvies), then `sudo apachectl restart`. (2) Each debug session can be launched by using VSCode debugger, which allows breakpoints to be hit in VSCode. Or just opening Chrome to http://localhost and use Chrome F2 debugging.
+- Test using remote... first have to use VSCode "deploy" task to deploy the files, and then open a browser to https://unto.me/geopic
 
-## Check Type Definitions
-When encountering type errors or uncertainty about external library APIs:
-1. Read the relevant `.d.ts` files in `node_modules/` before guessing at usage
-2. For imports like `import { X } from '@some/library'`, check `node_modules/@some/library/dist/*.d.ts`
-3. This codebase uses minimal dependencies, so reading type definitions is feasible and expected
 
 ## Style for Claude's interactions
 
@@ -107,7 +86,80 @@ If you are unclear whether the user has given explicit go-ahead, then ask them:
 - Implemented first version of a faster batched+concurrent+cached "walk" algorithm in test.ts testWalk()
 
 ### TODO
-- Improve the testWalk() component: (1) handle failure, particularly rate-limiting on the thumbnail fetch requests, (2) display progress, (3) handle ACCESS_TOKEN expiry
-- Figure out realistic numbers for the entire cache strategy - in particular, total size for 60k photos, download time, google-maps-populate time
-- If it all works, then switch the product over to use the testWalk approach.
+- Switch to OAuth2 Code Flow with PKCE (based on the sample in ~/code/OneDriveForLocal). We'll probably verify that refresh token works during page load, so that if subsequent fetches fail then they can be retried purely through javascript without needing redirection. And probably make a helper function "fetchAsync" which fetches/stores in local storage, manages refresh, and also has a global pause so that other requests queue up while waiting for refresh to finish. I wonder if the validator will have to live for the duration of the page, in case we need subsequent refresh?
+- Figure out realistic numbers for the entire cache strategy - see performance discussion below.
 - Add a sidebar for filtering, and change the map to fill the entire UI
+- Add progress indicators in the UI. Also, just a silly thing, but the progress indicator in utils.ts progressBar() looks weird: the % should always be to the left of the arrow.
+```
+[===>..16%...........] - 2013
+[===>..18%...........] - 2014
+[====>..21%..........] - 2015
+[==33%=>.............] - 2016
+[====43%=>...........] - 2017
+[=======56%=>........] - 2018
+[========64%=>.......] - 2020
+```
+- Add a list of all thumbnails for pictures in the current viewport (unless there are just too many...)
+
+### Performance & UX Analysis & Solutions (2025-07-02)
+
+**1. Lazy Loading Root Cause**
+- **Problem**: Chrome network traffic shows all 10k thumbnail URLs activating immediately despite `loading="lazy"` attribute
+- **Root Cause**: All 10k images are immediately attached to DOM via `AdvancedMarkerElement` constructor (index.ts:216). Even with `loading="lazy"`, browser considers many markers as potentially visible due to Google Maps' dynamic viewport and zoom capabilities.
+- **Solution**: Implement IntersectionObserver-based viewport rendering where markers are only created when visible in current map bounds, rather than relying on browser lazy loading for pre-created DOM elements.
+
+**2. Map Performance Threshold**
+- **Problem**: Google Maps scrolling performance degrades significantly at 12k+ items vs 10k items
+- **Root Cause**: Synchronous DOM-heavy marker creation pipeline (index.ts:208-221). Creates 12k+ IMG elements in tight loop without yielding to main thread, causing DOM thrashing. Default MarkerClusterer configuration is suboptimal for large datasets.
+- **Solution**: 
+  - Implement batched marker creation with `requestAnimationFrame` yielding (100 markers per batch)
+  - Optimize MarkerClusterer: `{radius: 100, maxZoom: 12, minPoints: 3}`
+  - Use DocumentFragment for batch DOM operations to reduce layout recalculation
+
+#### **Implementation Priorities**
+
+**HIGH PRIORITY - Core Performance**
+1. **Viewport-Based Progressive Loading**: Replace current marker creation with IntersectionObserver that only creates markers for visible map bounds
+2. **Batched Marker Creation**: Implement async batching with requestAnimationFrame yielding 
+3. **MarkerClusterer Optimization**: Configure for large datasets with appropriate radius/maxZoom settings
+
+**MEDIUM PRIORITY - Caching Performance**  
+4. **Local Storage Integration**: Implement localStorage backing for cache validation with IndexedDB for thumbnails
+5. **Incremental Cache Updates**: File-level cache invalidation instead of folder-level rebuilds
+
+**LOWER PRIORITY - UX Improvements**
+6. **Cluster UI Design**: Thumbnail array at bottom for cluster contents with maximum zoom level (block-size)
+7. **Filter UI Implementation**: Critical for 60k photo navigation given performance constraints
+8. **Throttling Source Verification**: Identify source of throttling alerts (likely resolved by above optimizations)
+
+#### **Technical Implementation Notes**
+
+**Viewport-Based Loading Pattern**:
+```typescript
+// Only create markers for items within current map bounds
+map.addListener('bounds_changed', () => {
+  const bounds = map.getBounds();
+  const visibleItems = geoItems.filter(item => bounds.contains(item.position));
+  createMarkersInBatches(visibleItems);
+});
+```
+
+**Batch Marker Creation Pattern**:
+```typescript
+async function createMarkersInBatches(items: GeoItem[], batchSize = 100) {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    // Create batch of markers...
+    await new Promise(resolve => requestAnimationFrame(resolve));
+  }
+}
+```
+
+**Local Storage Cache Pattern**:
+```typescript
+// Check local cache first, fall back to OneDrive
+const localCache = localStorage.getItem(`cache-${folderPath}`);
+if (localCache && JSON.parse(localCache).etag === remoteETag) {
+  return JSON.parse(localCache).data;
+}
+```
