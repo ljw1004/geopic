@@ -11,24 +11,12 @@
 
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, GeoData } from './geoitem.js';
+import { generateImpl, GeoData, asClusters } from './geoitem.js';
 
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import type {
-    MarkerClusterer as MarkerClustererType,
-    Cluster,
-    defaultOnClusterClickHandler as DefaultOnClusterClickHandlerType
-} from '@googlemaps/markerclusterer';
-import { dbGet, dbPut } from './utils.js';
-// import { dbGet, dbPut } from './utils.js';
-const markerClusterer = (window as any).markerClusterer as {
-    MarkerClusterer: typeof MarkerClustererType;
-    defaultOnClusterClickHandler: typeof DefaultOnClusterClickHandlerType;
-}
+import { dbGet, dbPut, FetchError } from './utils.js';
 
-// The AdvancedMarkerElement class is loaded differently.
-// Here we're solely using a dev-time type alias.
 type AdvancedMarkerElement = google.maps.marker.AdvancedMarkerElement;
 
 /**
@@ -113,10 +101,12 @@ export async function onBodyLoad(): Promise<void> {
     document.getElementById('login')!.style.display = accessToken ? 'none' : 'inline';
     document.getElementById('logout')!.style.display = accessToken ? 'inline' : 'none';
     document.getElementById('generate')!.style.display = accessToken ? 'inline' : 'none';
-    console.log(`accessToken: ${accessToken ? 'valid' : 'invalid'}`);
-    console.log(`geoData: ${geoData ? 'exists' : 'does not exist'}`);
-    console.log(`status: ${status ? status : 'unknown'}`);
-    if (geoData) await renderGeo(geoData);
+    if (geoData) {
+        const markerLibrary = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
+        const map = (document.getElementById("map")! as google.maps.MapElement).innerMap;
+        renderGeo(geoData, map, markerLibrary);
+        map.addListener('bounds_changed', () => renderGeo(geoData, map, markerLibrary));
+    }
 }
 
 /**
@@ -136,42 +126,66 @@ export function onLogoutClick(): void {
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
 
-/**
- * Given a driveItem response from OneDrive, which is assumed to have ['@microsoft.graph.downloadUrl'], this function
- * 1. updates the "geo" href link for the user to download the geo file
- * 2. using geoItems if this parameter was used, or downloading from driveItem if not, this recreates the google map and populates it with markers.
- */
-export async function renderGeo(geoData: GeoData): Promise<void> {
+function renderGeo(geoData: GeoData, map: google.maps.Map, markerLibrary: google.maps.MarkerLibrary): void {
+    for (const marker of MARKERS) marker.map = null;
     MARKERS = [];
 
-    // The google maps library loads asynchronously. Here's how we await until it's finished loading:
-    const markerLibrary = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
-    const map = (document.getElementById("map")! as google.maps.MapElement).innerMap;
+    const bounds = map.getBounds()!;
+    const sw = {lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng()};
+    const ne = {lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng()};
+    const clusters = asClusters(sw, ne, map.getDiv().offsetWidth, geoData.geoItems);
 
-    console.log(`Markering...`);
-    for (const geoItem of geoData.geoItems.slice(0, 10000)) {
-        try {
-            const content = document.createElement('img');
-            content.src = geoItem.thumbnailUrl;
-            content.loading = "lazy";
-            content.style.width = "6em";
-            content.style.height = `${6.0 / geoItem.aspectRatio}em`;
-            const marker = new markerLibrary.AdvancedMarkerElement({ map, content, position: geoItem.position });
-            MARKERS.push(marker);
-        } catch (e) {
-            console.error(String(e));
-        }
-    };
-    console.log('Markered! Clustering...');
+    for (const cluster of clusters) {
+        const item = cluster.someItems[0];
+        const content = document.createElement('div');
+        content.style.position = 'relative';
+        content.title = cluster.totalItems > 1 ? `${cluster.totalItems} photos` : `${item.date}`;
+        const img = document.createElement('img');
+        img.src = item.thumbnailUrl;
+        img.loading = 'lazy';
+        img.style.width = item.aspectRatio >= 1 ? '80px' : `${80 * item.aspectRatio}px`;
+        img.style.height = item.aspectRatio < 1 ? '80px' : `${80 / item.aspectRatio}px`;
+        img.style.border = '1px solid white';
+        img.style.borderRadius = '5px';
+        content.appendChild(img);
+        const badge = document.createElement('div');
+        badge.textContent = cluster.totalItems === 1 ? '' : cluster.totalItems.toString();
+        badge.style.position = 'absolute';
+        badge.style.top = '-5px';
+        badge.style.right = '-5px';
+        badge.style.backgroundColor = 'rgba(21, 132, 199, 0.9)';
+        badge.style.color = 'white';
+        badge.style.fontWeight = 'bold';
+        badge.style.fontSize = '12px';
+        badge.style.padding = '2px 6px';
+        badge.style.borderRadius = '12px';
+        badge.style.border = '1px solid white';
+        content.appendChild(badge);
+        const marker = new markerLibrary.AdvancedMarkerElement({map, content, position: item.position, zIndex: cluster.totalItems});
+        marker.addListener('click', () => map.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
+        MARKERS.push(marker);
+    }
 
-    new markerClusterer.MarkerClusterer({
-        markers: MARKERS, map, onClusterClick: (event: google.maps.MapMouseEvent, cluster: Cluster, map: google.maps.Map): void => {
-            // TODO: below the map, show all the thumbnails in the cluster
-            // And if the cluster has items in small bounds, then suppress the default handler.
-            markerClusterer.defaultOnClusterClickHandler(event, cluster, map);
-        }
-    });
-    console.log('Clustered!');
+    const thumbnailsDiv = document.getElementById('thumbnails')!;
+    thumbnailsDiv.innerHTML = '';
+
+    for (const item of clusters.flatMap(c => c.someItems).splice(0,400)) {
+        const img = document.createElement('img');
+        img.src = item.thumbnailUrl;
+        img.style.width = item.aspectRatio >= 1 ? '100px' : `${100 * item.aspectRatio}px`;
+        img.style.height = item.aspectRatio < 1 ? '100px' : `${100 / item.aspectRatio}px`;
+        img.title = item.date;
+        img.addEventListener('click', async () => {
+            const accessToken = localStorage.getItem('access_token');
+            if (!accessToken) return;
+            const r = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${item.id}?select=webUrl`, { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
+            if (!r.ok) throw new FetchError(r, await r.text());
+            const url = (await r.json()).webUrl;
+            window.open(url, 'geopic-image');
+        });
+        thumbnailsDiv.appendChild(img);
+    }
+    
 }
 
 /**

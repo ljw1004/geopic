@@ -1,5 +1,12 @@
 import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
+/**
+ * A position. lng might be negative. Beware of the antimeridian (where -180 and +180 meet)...
+ */
+export interface Position {
+    lat: number;
+    lng: number;
+}
 
 /**
  * This object contains everything we we need for a folder to (1) cache and validate cache, (2) display thumbnails on a map.
@@ -20,15 +27,22 @@ export interface GeoData {
  * An individual photo/video with geolocation data.
  */
 export interface GeoItem {
-    position: {
-        lat: number;
-        lng: number;
-    };
+    position: Position;
     date: string; // ISO date string for JSON serialization compatibility
     thumbnailUrl: string;
     id: string;
     aspectRatio: number;
 }
+
+/**
+ * A cluster of GeoItems to be displayed on the map
+ */
+export interface Cluster {
+    someItems: GeoItem[];
+    totalItems: number;
+    bounds: {sw: Position, ne: Position};
+}
+
 
 /**
  * For creating an index of GeoItems and CacheData, we use "Workitems":
@@ -282,4 +296,47 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
             toProcess.push(...thisFetch);
         }
     }
+}
+
+/**
+ * This function takes a map viewport, represented by (1) its lat/lng bounds, (2) its pixel dimensions.
+ * It splits this into "clusters" (tiles), each cluster being an approximately 60x60 square of pixels (give or take;
+ * if the pixelWidth/Height don't neatly divide into 60 then we'll use however many clusters best fit).
+ * It iterates through all the items (it's fast! at about 50k points in one ms) and figures out which cluster each item
+ * belongs to.
+ * 
+ * It returns an array of clusters that contain at least one item. Each returned cluster is represented by
+ * (1) a list of up to 20 items in that cluster, (2) the total count of items in that cluster.
+ * The tiling is "stable": when the user pans the map, cluster boundaries remain fixed.
+ */
+export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[]): Cluster[] {
+    const TILE_SIZE_PX = 60;
+    const MAX_ITEMS_PER_TILE = 10;
+    const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360)/ Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
+    const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: (Math.floor(sw.lng / tileSize) * tileSize + 360 + 180) % 360 - 180 };
+    const numTilesX = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
+    const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
+    const tiles: Cluster[] = [];
+    for (let y = 0; y < numTilesY; y++) {
+        for (let x = 0; x < numTilesX; x++) {
+            tiles.push({
+                someItems: [],
+                totalItems: 0,
+                bounds: {
+                    sw: { lat: swSnap.lat + y * tileSize, lng: swSnap.lng + x * tileSize },
+                    ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: swSnap.lng + (x + 1) * tileSize }
+                }
+            });
+        }
+    }
+
+    for (const item of items) {
+        const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
+        const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
+        if (x < 0 || x >= numTilesX || y < 0 || y >= numTilesY) continue;
+        const tile = tiles[y * numTilesX + x];
+        if (tile.someItems.length < MAX_ITEMS_PER_TILE) tile.someItems.push(item);
+        tile.totalItems++;
+    }
+    return tiles.filter(t => t.someItems.length > 0);
 }

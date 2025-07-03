@@ -25,7 +25,12 @@
       "Bash(git branch:*)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.anthropic.com)",
-      "Bash(tsc --noEmit)"
+      "Bash(tsc --noEmit)",
+      "Bash(echo $SHELL)",
+      "Bash(shopt:*)",
+      "Bash(echo:*)",
+      "Bash(cp:*)",
+      "Bash(open https://unto.me/geopic)"
     ],
     "deny": []
   }
