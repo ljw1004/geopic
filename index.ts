@@ -21,6 +21,7 @@ import type {
     defaultOnClusterClickHandler as DefaultOnClusterClickHandlerType
 } from '@googlemaps/markerclusterer';
 import { dbGet, dbPut } from './utils.js';
+// import { dbGet, dbPut } from './utils.js';
 const markerClusterer = (window as any).markerClusterer as {
     MarkerClusterer: typeof MarkerClustererType;
     defaultOnClusterClickHandler: typeof DefaultOnClusterClickHandlerType;
@@ -82,7 +83,11 @@ export async function onBodyLoad(): Promise<void> {
     let status: 'fresh' | 'stale' | undefined;
     const [localCache, driveItem] = await Promise.all([
         dbGet<GeoData>(),
-        accessToken ? fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async r => r.ok ? await r.json() as GeoData : undefined) : Promise.resolve(undefined)
+        accessToken ? fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async r => {
+            try {
+                return r.ok ? await r.json() as GeoData : undefined
+            } catch { return undefined; }
+        }) : Promise.resolve(undefined)
     ]);
 
     if (!driveItem) {
@@ -111,7 +116,7 @@ export async function onBodyLoad(): Promise<void> {
     console.log(`accessToken: ${accessToken ? 'valid' : 'invalid'}`);
     console.log(`geoData: ${geoData ? 'exists' : 'does not exist'}`);
     console.log(`status: ${status ? status : 'unknown'}`);
-    // if (geoData) await renderGeo(geoData);
+    if (geoData) await renderGeo(geoData);
 }
 
 /**

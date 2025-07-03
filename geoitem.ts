@@ -1,4 +1,4 @@
-import { FetchError, blobToDataUrl, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
+import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
 
 /**
@@ -104,7 +104,7 @@ function createStartWorkItem(driveItem: any, path: string[]): WorkItem {
 }
 
 /**
- * Creates an END workitem with one request, to write the cache
+ * Creates an END workitem with one request, to upload to cache
  */
 function createEndWorkItem(item: WorkItem): WorkItem {
     return {
@@ -150,13 +150,13 @@ function createGeoItem(driveItem: any): GeoItem {
 /**
  * Resolves all thumbnails that haven't yet been resolved.
  */
-async function resolveThumbnails(prefix: string, item: WorkItem): Promise<void> {
+async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promise<void> {
     let lastPct = "";
     function log(count: number, total: number, throttled: boolean): void {
         const pct = `${Math.floor(count / total * 100)}%`;
         if (pct === lastPct) return;
         lastPct = pct;
-        console.log(`${prefix} - [thumbnails ${pct}${throttled ? ' (throttled)' : ''}]`);
+        f(`[thumbnails ${pct}${throttled ? ' (throttled)' : ''}]`);
     }
 
     const fetches = await rateLimitedBlobFetch(log, item.data.geoItems.filter(geo => !geo.thumbnailUrl.startsWith('data:')).map(gi => [gi.thumbnailUrl, gi]));
@@ -184,8 +184,11 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
     const toFetch: WorkItem[] = [createStartWorkItem(rootDriveItem, [])];
     const stats = { bytesFromCache: 0, bytesProcessed: 0, bytesTotal: rootDriveItem.size, startTime: Date.now() };
 
-    function progressPrefix(item: WorkItem): string {
-        return `${progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal)} - ${item.data.path.join('/')}`;
+    function log(item: WorkItem): (s?: string) => void {
+        return (s) => {
+            const prefix = item && `${progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal)} - ${item.data.path.length === 0 ? 'Pictures' : item.data.path.join('/')}`;
+            console.log(s ? `${prefix} - ${s}` : prefix);
+        }
     }
 
     while (true) {
@@ -219,14 +222,14 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
 
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
-                await resolveThumbnails(progressPrefix(item), item);
+                await resolveThumbnails(log(item), item);
                 toFetch.unshift(createEndWorkItem(item));
             } else {
                 toFetch.sort((a, b) => cacheFilename(a.data.path).localeCompare(cacheFilename(b.data.path)));
                 waiting.set(cacheFilename(item.data.path), item);
             }
         } else if (item && item.state === 'END') {
-            console.log(progressPrefix(item));
+            log(item)();
             if (item.data.path.length === 0) return item.data; // Finished the root folder!
 
             // Book-keeping: if our parent's finish-action was left to us, then we'll do it now.
@@ -235,9 +238,16 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
             parent.data.geoItems.push(...item.data.geoItems);
             parent.remainingSubfolders--;
             if (parent.remainingSubfolders === 0) {
-                await resolveThumbnails(progressPrefix(parent), parent);
+                await resolveThumbnails(log(parent), parent);
                 waiting.delete(parentName);
-                toFetch.unshift(createEndWorkItem(parent));
+                const data = JSON.stringify(parent.data);
+                if (data.length < 4 * 1024 * 1024) {
+                    toFetch.unshift(createEndWorkItem(parent));
+                } else {
+                    const logpct = (count: number, total: number) => log(parent)(`[upload ${Math.floor(count / total * 100)}%]`);
+                    await multipartUpload(logpct, cacheFilename(parent.data.path), data, accessToken);
+                    toProcess.unshift({ ...parent, state: 'END', responses: {}, requests: [] });
+                }
             }
         } else {
             const thisFetch: WorkItem[] = [];
@@ -249,13 +259,14 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
             }
             let batchResponse: any = null;
             while (true) {
+                const body = JSON.stringify({ requests });
                 batchResponse = await fetch('https://graph.microsoft.com/v1.0/$batch', {
                     'method': 'POST',
                     'headers': {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${accessToken}`
                     },
-                    'body': JSON.stringify({ requests })
+                    'body': body
                 });
                 if (batchResponse.status !== 429) break;
                 await new Promise(resolve => setTimeout(resolve, 2000));

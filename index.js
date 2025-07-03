@@ -12,6 +12,7 @@
 /// <reference types="google.maps" />
 import { generateImpl } from './geoitem.js';
 import { dbGet, dbPut } from './utils.js';
+// import { dbGet, dbPut } from './utils.js';
 const markerClusterer = window.markerClusterer;
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS.
@@ -61,7 +62,14 @@ export async function onBodyLoad() {
     let status;
     const [localCache, driveItem] = await Promise.all([
         dbGet(),
-        accessToken ? fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async (r) => r.ok ? await r.json() : undefined) : Promise.resolve(undefined)
+        accessToken ? fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async (r) => {
+            try {
+                return r.ok ? await r.json() : undefined;
+            }
+            catch {
+                return undefined;
+            }
+        }) : Promise.resolve(undefined)
     ]);
     if (!driveItem) {
         localStorage.removeItem('access_token');
@@ -91,7 +99,8 @@ export async function onBodyLoad() {
     console.log(`accessToken: ${accessToken ? 'valid' : 'invalid'}`);
     console.log(`geoData: ${geoData ? 'exists' : 'does not exist'}`);
     console.log(`status: ${status ? status : 'unknown'}`);
-    // if (geoData) await renderGeo(geoData);
+    if (geoData)
+        await renderGeo(geoData);
 }
 /**
  * Handles the login button click event.

@@ -183,11 +183,51 @@ export async function dbGet() {
 export function progressBar(count1, count2, total) {
     const barWidth = 20;
     const equalsCount = Math.floor(count1 / total * barWidth);
-    const dashCount = Math.floor((count1 + count2) / total * barWidth) - equalsCount;
+    const dashCount = Math.min(Math.floor((count1 + count2) / total * barWidth) - equalsCount, barWidth - equalsCount - 1);
     const emptyCount = barWidth - equalsCount - dashCount - 1;
     let bar = '='.repeat(equalsCount) + '-'.repeat(dashCount) + '>' + '.'.repeat(emptyCount);
     const pct = Math.floor((count1 + count2) / total * 100).toString() + '%';
     const pos = equalsCount + dashCount >= 5 ? equalsCount + dashCount - 4 : equalsCount + dashCount + 3;
     return `[${bar.substring(0, pos)}${pct}${bar.substring(pos + pct.length)}]`;
+}
+/**
+ * A multipart file uploader. This can be used for large files.
+ * (Batch allows up to 4mb, PUT allows up to 250mb, multipart is unlimited).
+ * The way multipart upload works is chunks up to 60mb get uploaded, and they
+ * must come in order one after the other. The sweet spot is apparently 10mb.
+ */
+export async function multipartUpload(log, name, data, accessToken) {
+    const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB chunks (must be multiple of 320 KiB, which this is)
+    const bytes = new TextEncoder().encode(data);
+    const r = await fetch(`https://graph.microsoft.com/v1.0/me/drive/special/approot:/${name}:/createUploadSession`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            item: {
+                '@microsoft.graph.conflictBehavior': 'replace',
+            }
+        })
+    });
+    if (!r.ok)
+        throw new FetchError(r, await r.text());
+    log(0, bytes.length);
+    const uploadUrl = (await r.json()).uploadUrl;
+    for (let start = 0; start < bytes.length; start += CHUNK_SIZE) {
+        const end = Math.min(start + CHUNK_SIZE, bytes.length); // exclusive
+        const r = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: {
+                'Content-Length': String(end - start),
+                'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`
+            },
+            body: bytes.slice(start, end)
+        });
+        if (!r.ok)
+            throw new FetchError(r, await r.text());
+        log(end, bytes.length);
+    }
 }
 //# sourceMappingURL=utils.js.map
