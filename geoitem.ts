@@ -1,5 +1,7 @@
 import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
+const SCHEMA_VERSION = 2;
+
 /**
  * A position. lng might be negative. Beware of the antimeridian (where -180 and +180 meet)...
  */
@@ -13,13 +15,15 @@ export interface Position {
  * This object will be serialized to JSON and stored on OneDrive.
  */
 export interface GeoData {
+    schemaVersion: number; // version number
     id: string; // OneDrive ID of this folder
-    path: string[]; // Used by both the workitem processing algorithm (to find parents), and for debugging
     size: number; // for cache validation
     lastModifiedDateTime: string; // for cache validation
     cTag: string; // for cache validation
     eTag: string; // for cache validation
+    immediateChildCount: number; // the immediate children are the first items in geoItems
 
+    folders: string[]; // Within a WorkItem, folders[0] is always that workitem's folder
     geoItems: GeoItem[];
 }
 
@@ -27,15 +31,17 @@ export interface GeoData {
  * An individual photo/video with geolocation data.
  */
 export interface GeoItem {
-    position: Position;
-    date: string; // ISO date string for JSON serialization compatibility
-    thumbnailUrl: string;
-    id: string;
-    aspectRatio: number;
+    id: string; // OneDrive ID
+    position: Position; // longitude and latitude
+    date: number; // in format "YYYYMMDD" e.g. 20241231 for 31st December 2024
+    thumbnailUrl: string; // typically a data: url
+    name: string; // filename
+    folderIndex: number; // an index into GeoData.folders[] array
+    tags: string[]; 
 }
 
 /**
- * A cluster of GeoItems to be displayed on the map
+ * Output from asClusters() -- a cluster of GeoItems to be displayed on the map
  */
 export interface Cluster {
     someItems: GeoItem[];
@@ -43,6 +49,22 @@ export interface Cluster {
     bounds: {sw: Position, ne: Position};
 }
 
+/**
+ * Input to asClusters() -- a filter on which GeoItems to include in the clusters
+ */
+export interface Filter {
+    dateRange: { start: number, end: number } | undefined; // in the same "YYYYMMDD" format as GeoItem.date. End is exclusive.
+    text: string | undefined; // Can include slashes, e.g. "2012/01"
+}
+
+/**
+ * Output from asClusters() -- a summary of all GeoItems in bounds, including those that 'filter' filters out
+ * Thanks to the magic of Javascript sparse arrays, the full range is
+ * dateCounts.findIndex(c => c) <= date < dateCounts.length
+ */
+export interface InBoundsSummary {
+    dateCounts: Map<number, number>; // dateCounts[YYYYMMDD] is the number of GeoItems in map-bounds on that date
+}
 
 /**
  * For creating an index of GeoItems and CacheData, we use "Workitems":
@@ -76,12 +98,13 @@ interface WorkItem {
     requests: any[]; // requests needed before we can proceed; added by whoever created the workitem, removed by batch-API
     responses: { [id: string]: any }; // reponses; added by batch-API, removed by the workitem processor
     data: GeoData; // initialized upon creation with an empty list of geoItems; processor will append to the list
+    path: string[]; // Empty for root
     remainingSubfolders: number; // if cache/geoItems is incomplete, this is how many subfolders it still needs
 };
 
 function cacheFilename(path: string[]): string {
     if (path.length === 0) return 'index.json';
-    return path.join('-').replace(/[^a-zA-Z0-9-]/g, '_') + '.json';
+    return path.join('_') + '.json';
 }
 
 
@@ -95,7 +118,7 @@ function createStartWorkItem(driveItem: any, path: string[]): WorkItem {
             {
                 id: `children-${driveItem.id}`,
                 method: 'GET',
-                url: `/me/drive/items/${driveItem.id}/children?$top=10000&$expand=thumbnails&select=name,id,ctag,etag,size,lastModifiedDateTime,folder,file,location,photo,video`
+                url: `/me/drive/items/${driveItem.id}/children?$top=10000&expand=tags,thumbnails&select=name,id,ctag,etag,size,lastModifiedDateTime,folder,file,location,photo,video`
             },
             {
                 id: `cache-${driveItem.id}`,
@@ -105,14 +128,17 @@ function createStartWorkItem(driveItem: any, path: string[]): WorkItem {
         ],
         responses: {},
         data: {
+            schemaVersion: SCHEMA_VERSION,
             id: driveItem.id,
-            path,
             size: driveItem.size,
             lastModifiedDateTime: driveItem.lastModifiedDateTime,
             cTag: driveItem.cTag,
             eTag: driveItem.eTag,
+            immediateChildCount: 0,
+            folders: [],
             geoItems: [],
         },
+        path,
         remainingSubfolders: 0
     };
 }
@@ -126,12 +152,12 @@ function createEndWorkItem(item: WorkItem): WorkItem {
             {
                 id: `write-${item.data.id}`,
                 method: 'PUT',
-                url: `/me/drive/special/approot:/${cacheFilename(item.data.path)}:/content`,
+                url: `/me/drive/special/approot:/${cacheFilename(item.path)}:/content`,
                 // I experimentally found weird bugs and workarounds in the batch API (not the individual API):
                 // - If I upload an object with content-type application/json, OneDrive claims success but stores a file of size 0
                 // - If I upload a string, or base64-encoded json string, with application/json, OneDrive fails with "Invalid json body"
                 // - If I upload a base64-encoded json string as text/plain, OneDrive succeeds and stores the file, and subsequent download has content-type application/json
-                body: btoa(JSON.stringify(item.data)),
+                body: btoa((Array.from(new TextEncoder().encode(JSON.stringify(item.data)), b => String.fromCharCode(b))).join('')),
                 headers: { 'Content-Type': 'text/plain' }
             }
 
@@ -143,21 +169,21 @@ function createEndWorkItem(item: WorkItem): WorkItem {
 /**
  * Creates a GeoItem
  */
-function createGeoItem(driveItem: any): GeoItem {
-    const lat = Math.round(driveItem.location.latitude * 100000) / 100000;
-    const lng = Math.round(driveItem.location.longitude * 100000) / 100000;
-    if (isNaN(lat) || isNaN(lng)) {
-        console.error(`Invalid lat/lng for driveItem. ${JSON.stringify(driveItem)}`);
-    }
+function createGeoItem(driveItem: any, folderIndex: number): GeoItem {
+    const d = new Date(driveItem.photo.takenDateTime); // ISO8601 string "2019-08-05T17:42:22Z"
+    const date = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate(); // YYYYMMDD number
+
     return {
         id: driveItem.id,
+        name: driveItem.name,
         position: {
-            lat,
-            lng,
+            lat: Math.round(driveItem.location.latitude * 100000) / 100000,
+            lng: Math.round(driveItem.location.longitude * 100000) / 100000,
         },
-        date: driveItem.photo.takenDateTime,
+        date,
         thumbnailUrl: driveItem.thumbnails[0].small.url,
-        aspectRatio: Math.round(driveItem.thumbnails[0].small.width / driveItem.thumbnails[0].small.height * 100) / 100,
+        folderIndex,
+        tags: (driveItem.tags || []).map(t => t.name),
     };
 }
 
@@ -170,7 +196,7 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
         const pct = `${Math.floor(count / total * 100)}%`;
         if (pct === lastPct) return;
         lastPct = pct;
-        f(`[thumbnails ${pct}${throttled ? ' (throttled)' : ''}]`);
+        f(`making thumbnails ${pct}${throttled ? ' (throttled)' : ''}`);
     }
 
     const fetches = await rateLimitedBlobFetch(log, item.data.geoItems.filter(geo => !geo.thumbnailUrl.startsWith('data:')).map(gi => [gi.thumbnailUrl, gi]));
@@ -189,77 +215,101 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
  * Recursive walk of all photos in the Pictures folder, reading and writing a persistent cache in OneDrive.
  * Takes ~20mins for 10 years' worth of photos.
  * 
- * TODO: need to display progress nicely
  * TODO: when cache is invalid but exists, any cached geoItems (with thumbnails) are still valid and should be used.
  */
-export async function generateImpl(accessToken: string, rootDriveItem: any): Promise<GeoData> {
+export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, accessToken: string, photosDriveItem: any): Promise<GeoData> {
     const waiting = new Map<string, WorkItem>();
     const toProcess: WorkItem[] = [];
-    const toFetch: WorkItem[] = [createStartWorkItem(rootDriveItem, [])];
-    const stats = { bytesFromCache: 0, bytesProcessed: 0, bytesTotal: rootDriveItem.size, startTime: Date.now() };
+    const toFetch: WorkItem[] = [createStartWorkItem(photosDriveItem, [])];
+    const stats = { bytesFromCache: 0, bytesProcessed: 0, bytesTotal: photosDriveItem.size, startTime: Date.now() };
 
     function log(item: WorkItem): (s?: string) => void {
         return (s) => {
-            const prefix = item && `${progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal)} - ${item.data.path.length === 0 ? 'Pictures' : item.data.path.join('/')}`;
-            console.log(s ? `${prefix} - ${s}` : prefix);
+            const bar = progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal);
+            const folder = item.path.length === 0 ? ['Pictures'] : item.path;
+            progress([`[${bar}]`, folder.join('/'), s || '']);
         }
     }
 
     while (true) {
         const item = toProcess.shift();
         if (item && item.state === 'START') {
-            const cache = item.responses[`cache-${item.data.id}`];
-            const children = item.responses[`children-${item.data.id}`];
-            if (children.body.error && children.body.error.code === 'activityLimitReached') {
+            const cacheResult = item.responses[`cache-${item.data.id}`];
+            const childrenResult = item.responses[`children-${item.data.id}`];
+            if (childrenResult.body.error && childrenResult.body.error.code === 'activityLimitReached') {
                 await new Promise(resolve => setTimeout(resolve, 2000));
                 toProcess.unshift(item);
                 continue;
             }
-            if (cache.status === 200 && cache.body.size === item.data.size) {
+            if (cacheResult.status === 200 && cacheResult.body.size === item.data.size && cacheResult.body.schemaVersion === SCHEMA_VERSION) {
                 stats.bytesFromCache += item.data.size;
-                toProcess.unshift({ ...item, data: cache.body, state: 'END', requests: [], responses: {} });
+                toProcess.unshift({ ...item, data: cacheResult.body, state: 'END', requests: [], responses: {} });
+                progress(cacheResult.body.geoItems);
                 continue;
+            }
+            const cache: Map<string,string> = new Map(); // if not the whole cache, we'll at least re-use thumbnails
+            if (cacheResult.status === 200) {
+                const cacheGeoData = cacheResult.body as GeoData;
+                for (const cachedItem of cacheGeoData.geoItems.splice(0,cacheGeoData.immediateChildCount)) {
+                    cache.set(cachedItem.id, cachedItem.thumbnailUrl);
+                }                    
             }
 
             // Kick off subfolders, and gather immediate children (but resolving their thumbnails is deferred until our finish-action)
-            for (const child of children.body.value) {
+            for (const child of childrenResult.body.value) {
                 if (child.folder) {
-                    toFetch.push(createStartWorkItem(child, [...item.data.path, child.name]));
+                    toFetch.push(createStartWorkItem(child, [...item.path, child.name]));
                     item.remainingSubfolders++;
                 } else if (child.file) {
                     stats.bytesProcessed += child.size;
                     if (child.location && child.location.latitude && child.location.longitude && child.thumbnails?.at(0)?.small?.url && child.photo?.takenDateTime) {
-                        item.data.geoItems.push(createGeoItem(child));
+                        const folderIndex = 0; // invariant: item.folders[0] will be folder of that workitem
+                        const childItem = createGeoItem(child, folderIndex);
+                        if (cache.has(childItem.id)) childItem.thumbnailUrl = cache.get(childItem.id)!;
+                        item.data.geoItems.push(childItem);
                     }
                 }
             }
+            item.data.immediateChildCount = item.data.geoItems.length;
+            if (item.data.immediateChildCount === 0) item.data.folders.push(item.path.join('/'));
 
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
                 await resolveThumbnails(log(item), item);
+                progress(item.data.geoItems);
                 toFetch.unshift(createEndWorkItem(item));
-            } else {
-                toFetch.sort((a, b) => cacheFilename(a.data.path).localeCompare(cacheFilename(b.data.path)));
-                waiting.set(cacheFilename(item.data.path), item);
+            } else {                
+                toFetch.sort((a, b) => cacheFilename(a.path).localeCompare(cacheFilename(b.path))); // alphabetical order to finish off subtrees quicker
+                waiting.set(cacheFilename(item.path), item);
             }
         } else if (item && item.state === 'END') {
             log(item)();
-            if (item.data.path.length === 0) return item.data; // Finished the root folder!
+            if (item.path.length === 0) return item.data; // Finished the root folder!
 
             // Book-keeping: if our parent's finish-action was left to us, then we'll do it now.
-            const parentName = cacheFilename(item.data.path.slice(0, -1))
+            // We'll have to adjust all our folder indexes. Invariant: a child's folders[] are
+            // are all different from those of its parent (hence no need to dedupe).
+            const parentName = cacheFilename(item.path.slice(0, -1));
             const parent = waiting.get(parentName)!;
-            parent.data.geoItems.push(...item.data.geoItems);
+            try {
+                const adjustedItems = item.data.geoItems.map(gi => ({ ...gi, folderIndex: gi.folderIndex + parent.data.folders.length }));
+                parent.data.geoItems = parent.data.geoItems.concat(adjustedItems);
+                parent.data.folders = parent.data.folders.concat(item.data.folders);
+            } catch (e) {
+                console.error(String(e));
+                debugger;
+            }
             parent.remainingSubfolders--;
             if (parent.remainingSubfolders === 0) {
                 await resolveThumbnails(log(parent), parent);
+                progress(parent.data.geoItems.slice(0, parent.data.immediateChildCount));
                 waiting.delete(parentName);
                 const data = JSON.stringify(parent.data);
                 if (data.length < 4 * 1024 * 1024) {
                     toFetch.unshift(createEndWorkItem(parent));
                 } else {
-                    const logpct = (count: number, total: number) => log(parent)(`[upload ${Math.floor(count / total * 100)}%]`);
-                    await multipartUpload(logpct, cacheFilename(parent.data.path), data, accessToken);
+                    const logpct = (count: number, total: number) => log(parent)(`upload ${Math.floor(count / total * 100)}%`);
+                    await multipartUpload(logpct, cacheFilename(parent.path), data, accessToken);
                     toProcess.unshift({ ...parent, state: 'END', responses: {}, requests: [] });
                 }
             }
@@ -309,9 +359,9 @@ export async function generateImpl(accessToken: string, rootDriveItem: any): Pro
  * (1) a list of up to 20 items in that cluster, (2) the total count of items in that cluster.
  * The tiling is "stable": when the user pans the map, cluster boundaries remain fixed.
  */
-export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[]): Cluster[] {
+export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[], filter: Filter): [Cluster[], InBoundsSummary] {
     const TILE_SIZE_PX = 60;
-    const MAX_ITEMS_PER_TILE = 10;
+    const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360)/ Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
     const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: (Math.floor(sw.lng / tileSize) * tileSize + 360 + 180) % 360 - 180 };
     const numTilesX = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
@@ -329,14 +379,19 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, items
             });
         }
     }
+    const dateCounts: Map<number, number> = new Map();
 
     for (const item of items) {
         const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
         const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
         if (x < 0 || x >= numTilesX || y < 0 || y >= numTilesY) continue;
+        dateCounts.set(item.date, (dateCounts.get(item.date) || 0)+1);
+        // dateCounts includes all items, but tiles only includes those that match the filter
+        if (filter.dateRange && (item.date < filter.dateRange.start || item.date >= filter.dateRange.end)) continue;
+        if (filter.text && !item.name.toLowerCase().includes(filter.text.toLowerCase())) continue;
         const tile = tiles[y * numTilesX + x];
         if (tile.someItems.length < MAX_ITEMS_PER_TILE) tile.someItems.push(item);
         tile.totalItems++;
     }
-    return tiles.filter(t => t.someItems.length > 0);
+    return [tiles.filter(t => t.someItems.length > 0), { dateCounts }];
 }

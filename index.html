@@ -1,43 +1,168 @@
 <html>
 
 <head>
-    <script async
-        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6u053DqLw1AeV23FNM9Tue-A9we6S01o&libraries=maps,marker&loading=async"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@googlemaps/markerclusterer/dist/index.min.js"></script>
     <script type="module" src="./index.js"></script>
-    <script type="module" src="./test.js"></script>
     <script type="module">
-        import { onBodyLoad, onGenerateClick, onLoginClick, onLogoutClick } from './index.js';
-
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('generate')?.addEventListener('click', onGenerateClick);
-            document.getElementById('login')?.addEventListener('click', onLoginClick);
-            document.getElementById('logout')?.addEventListener('click', onLogoutClick);
-            onBodyLoad();
-        });
+        import { onBodyLoad } from './index.js';
+        const initMapPromise = new Promise(resolve => window.initMap = resolve); // "defer" guarantees we run before google calls back
+        document.addEventListener('DOMContentLoaded', async () => onBodyLoad(await initMapPromise));
     </script>
+    <script defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6u053DqLw1AeV23FNM9Tue-A9we6S01o&libraries=maps,marker&loading=async&callback=initMap"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh; /* Full viewport height */
+        }
+
+        #side-panel {
+            width: 280px; /* Four thumbnails wide, each 70px */
+            flex-shrink: 0; /* Prevent shrinking */
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            box-sizing: border-box;
+            overflow-y: hidden; /* Prevent body scroll */
+        }
+
+        #map-container {
+            flex-grow: 1; /* Takes up remaining width */
+            height: 100%;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        #instructions {
+            padding: 8px;
+            background-color: #f0f0f0;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        #instructions span {
+            color: #007bff; /* Standard link blue */
+            cursor: pointer;
+        }
+
+        #instructions #logout {
+            float: right;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3; /* Light grey */
+            border-top: 3px solid #3498db; /* Blue */
+            border-radius: 50%;
+            width: 1ex; /* Relative to font size */
+            height: 1ex;
+            animation: spin 1.5s linear infinite;
+            display: inline-block;
+            vertical-align: text-bottom;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #instructions span:hover {
+            text-decoration: underline;
+        }
+
+        #filters {
+            margin: 1ex;
+        }
+
+        #thumbnails-scroll-area {
+            flex-grow: 1; /* Takes up remaining vertical space */
+            overflow-y: overlay; /* Superimpose scrollbar on content */
+        }
+
+        #thumbnails-grid {
+            display: flex;
+            flex-wrap: wrap;
+        }
+
+        #thumbnails-grid img {
+            width: 70px;
+            height: 70px;
+            object-fit: cover; /* Ensures images are square without distortion */
+            cursor: pointer;
+        }
+
+        /* Hide scrollbar but allow scrolling */
+        #thumbnails-scroll-area::-webkit-scrollbar {
+            display: none;
+        }
+
+        #histogram-container {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        #histogram-chart {
+            display: flex;
+            align-items: flex-end;
+            height: 60px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ccc;
+        }
+
+        #histogram-bars {
+            flex-grow: 1;
+            position: relative;
+            height: 100%;
+        }
+
+        #histogram-bars .bar {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+        }
+
+        #histogram-bars .bar-grey {
+            background-color: #e0e0e0; /* Light grey */
+            z-index: 1;
+        }
+
+        #histogram-bars .bar-blue {
+            background-color: #4a90e2; /* Blue */
+            z-index: 2;
+        }
+    </style>
 </head>
 
 <body>
+    <div id="side-panel">
+        <div id="instructions"></div>
 
-    <h1>Onedrive GeoPic</h1>
+        <div id="data-management">
+            <button id="generate" style="display:none;">Generate geo.json ...</button>
+            <button id="logout" style="display:none;">Logout</button>
+        </div>
 
-    <p>
-        <button id="generate" style="display:none;">Generate geo.json ...</button>
-        <button id="logout" style="display:none;">Logout</button>
-        <button id="login" style="display:none;">Login...</button>
-    </p>
+        <div id="filters">
+            <div id="histogram-container">
+                <div id="histogram-chart">
+                    <div id="histogram-bars"></div>
+                </div>
+            </div>
+        </div>
 
-    <div id="log">
-        This places a "geo.json" file in your Pictures folder, which lets you browse your pictures on a map.
+        <div id="thumbnails-scroll-area">
+            <div id="thumbnails-grid"></div>
+        </div>
     </div>
 
-    <gmp-map id="map" center="37.422,-122.0840" zoom="4" map-id="5d7eeda627cfbcf67ae37695"
-        style="height: 600px; width: 100%; margin-top: 20px;"></gmp-map>
-
-    <div id="thumbnails" style="margin-top: 20px; display: flex; flex-wrap: wrap; gap: 1px;"></div>
-
-
+    <div id="map-container">
+        <gmp-map id="map" center="37.422,-122.0840" zoom="4" map-id="5d7eeda627cfbcf67ae37695"></gmp-map>
+    </div>
 </body>
 
 </html>

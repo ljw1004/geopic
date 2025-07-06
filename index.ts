@@ -11,13 +11,12 @@
 
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, GeoData, asClusters } from './geoitem.js';
+import { generateImpl, GeoData, asClusters, GeoItem } from './geoitem.js';
+import { testHistogram } from './test.js';
 
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import { dbGet, dbPut, FetchError } from './utils.js';
-
-type AdvancedMarkerElement = google.maps.marker.AdvancedMarkerElement;
+import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
 
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS.
@@ -36,8 +35,9 @@ const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685'; // onedrive microsoft 
  * GOOGLE MAPS INTEGRATION.
  * We need to keep this list ourselves, since google's Map object doesn't give them to us.
  */
-let MARKERS: AdvancedMarkerElement[] = [];
-
+let MARKERS: google.maps.marker.AdvancedMarkerElement[] = [];
+let MARKER_LIBRARY: google.maps.MarkerLibrary;
+let MAP: google.maps.Map;
 
 
 /**
@@ -52,61 +52,70 @@ let MARKERS: AdvancedMarkerElement[] = [];
  * 2. The important document element IDs (geo, generate, logout, login) have correct visibility.
  */
 export async function onBodyLoad(): Promise<void> {
-    // 1. Get access_token from query-params or localStorage
-    const url = new URL(location.href);
-    const params = new URLSearchParams(url.hash.replace(/^#/, ''));
-    let accessToken = params.get("access_token");
+    MARKER_LIBRARY = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
+    MAP = (document.getElementById("map")! as google.maps.MapElement).innerMap;
+
+    // 1. First priority is to display local data if it exists, as quick as we can
+    const localCache = await dbGet<GeoData>();
+    if (localCache) {
+        renderGeo(localCache.geoItems);
+        MAP.addListener('bounds_changed', () => renderGeo(localCache.geoItems));
+    }
+
+    // 2. Then, at our leisure, we figure out login status and stateleness
+    let accessToken = new URLSearchParams(new URL(location.href).hash.replace(/^#/, '')).get("access_token");
     if (accessToken) {
         localStorage.setItem('access_token', accessToken);
     } else {
         accessToken = localStorage.getItem('access_token');
     }
 
-    // 2. Attempt to get geoData, and validate access token. Outcomes:
+    // 3. Attempt to get geoData, and validate access token. Outcomes:
     // - (!accessToken, !geoData, !status) -- user is signed out, no geo data
     // - (!accessToken, geoData, !status) -- user is signed out, geo data from local, we don't know if it's fresh or stale
     // - (accessToken, !geoData, !status) -- user is signed in but no geo data has ever been generated
     // - (accessToken, geoData, fresh|stale) -- user is signed in, geo data from most recent onedrive generation
-    let geoData: GeoData | null = null;
     let status: 'fresh' | 'stale' | undefined;
-    const [localCache, driveItem] = await Promise.all([
-        dbGet<GeoData>(),
-        accessToken ? fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async r => {
-            try {
-                return r.ok ? await r.json() as GeoData : undefined
-            } catch { return undefined; }
-        }) : Promise.resolve(undefined)
-    ]);
+    let photosDriveItem: any | null = null;
+    if (accessToken) {
+        document.getElementById('instructions')!.innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
+        const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
+        try { if (r.ok) photosDriveItem = await r.json(); } catch {}
+    }
 
-    if (!driveItem) {
+    if (!photosDriveItem) {
         localStorage.removeItem('access_token');
         accessToken = null;
-        geoData = localCache || null;
-        status = undefined;
-    } else if (localCache && localCache.size === driveItem.size) {
-        geoData = localCache;
-        status = 'fresh';
-    } else {
-        const onedriveCache = await fetch(`https://graph.microsoft.com/v1.0/me/drive/special/approot:/index.json:/content`, { 'headers': { 'Authorization': `Bearer ${accessToken}` } }).then(async r => r.ok ? await r.json() as GeoData : null);
-        if (onedriveCache) {
-            await dbPut(onedriveCache);
-            geoData = onedriveCache;
-        } else {
-            geoData = localCache || null;
-        }
-        status = geoData ? (geoData.size === driveItem.size ? 'fresh' : 'stale') : undefined;
+    } else if (localCache) {
+        status = localCache.size === photosDriveItem.size ? 'fresh' : 'stale';
     }
 
-    // 3. Update UI elements based on authentication state
-    document.getElementById('login')!.style.display = accessToken ? 'none' : 'inline';
-    document.getElementById('logout')!.style.display = accessToken ? 'inline' : 'none';
-    document.getElementById('generate')!.style.display = accessToken ? 'inline' : 'none';
-    if (geoData) {
-        const markerLibrary = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
-        const map = (document.getElementById("map")! as google.maps.MapElement).innerMap;
-        renderGeo(geoData, map, markerLibrary);
-        map.addListener('bounds_changed', () => renderGeo(geoData, map, markerLibrary));
+    // 4. Update UI elements
+    let instructions = 'Geopic';
+    if (status === 'fresh') {
+        instructions = `Geopic. ${localCache?.geoItems.length} photos <span title="logout" id="logout">⏏</span>`;
+    } else if (status === 'stale') {
+        instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">⏏</span>';
+    } else if (accessToken) {
+        instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">⏏</span>';
+    } else {
+        instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
     }
+    instruct(instructions);
+}
+
+function instruct(instructions: string): void {
+    // instructions += '<br/><span id="clear">Clear cache...</span>';
+    document.getElementById('instructions')!.innerHTML = instructions;
+    document.getElementById('login')?.addEventListener('click', onLoginClick);
+    document.getElementById('logout')?.addEventListener('click', onLogoutClick);
+    document.getElementById('generate')?.addEventListener('click', onGenerateClick);
+    document.getElementById('clear')?.addEventListener('click', onClearClick);
+}
+
+async function onClearClick(): Promise<void> {
+    await dbPut(null);
+    location.reload();
 }
 
 /**
@@ -126,14 +135,17 @@ export function onLogoutClick(): void {
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
 
-function renderGeo(geoData: GeoData, map: google.maps.Map, markerLibrary: google.maps.MarkerLibrary): void {
+function renderGeo(geoItems: GeoItem[]): void {
     for (const marker of MARKERS) marker.map = null;
     MARKERS = [];
 
-    const bounds = map.getBounds()!;
+    const bounds = MAP.getBounds()!;
     const sw = {lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng()};
     const ne = {lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng()};
-    const clusters = asClusters(sw, ne, map.getDiv().offsetWidth, geoData.geoItems);
+    const filter = { dateRange: undefined, text: undefined };
+    const [clusters, summary] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoItems, filter);
+    clusters.sort((a,b) => b.totalItems - a.totalItems)
+    testHistogram(summary.dateCounts);
 
     for (const cluster of clusters) {
         const item = cluster.someItems[0];
@@ -143,8 +155,8 @@ function renderGeo(geoData: GeoData, map: google.maps.Map, markerLibrary: google
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
         img.loading = 'lazy';
-        img.style.width = item.aspectRatio >= 1 ? '80px' : `${80 * item.aspectRatio}px`;
-        img.style.height = item.aspectRatio < 1 ? '80px' : `${80 / item.aspectRatio}px`;
+        img.style.width = '70px';
+        img.style.height = '70px';
         img.style.border = '1px solid white';
         img.style.borderRadius = '5px';
         content.appendChild(img);
@@ -161,20 +173,19 @@ function renderGeo(geoData: GeoData, map: google.maps.Map, markerLibrary: google
         badge.style.borderRadius = '12px';
         badge.style.border = '1px solid white';
         content.appendChild(badge);
-        const marker = new markerLibrary.AdvancedMarkerElement({map, content, position: item.position, zIndex: cluster.totalItems});
-        marker.addListener('click', () => map.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
+        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({map: MAP, content, position: item.position, zIndex: cluster.totalItems});
+        marker.addListener('click', () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
         MARKERS.push(marker);
     }
 
-    const thumbnailsDiv = document.getElementById('thumbnails')!;
+    const thumbnailsDiv = document.getElementById('thumbnails-grid')!;
     thumbnailsDiv.innerHTML = '';
 
-    for (const item of clusters.flatMap(c => c.someItems).splice(0,400)) {
+    
+    for (const item of clusters.flatMap(c => c.someItems).slice(0,40)) {
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
-        img.style.width = item.aspectRatio >= 1 ? '100px' : `${100 * item.aspectRatio}px`;
-        img.style.height = item.aspectRatio < 1 ? '100px' : `${100 / item.aspectRatio}px`;
-        img.title = item.date;
+        img.loading = 'lazy';
         img.addEventListener('click', async () => {
             const accessToken = localStorage.getItem('access_token');
             if (!accessToken) return;
@@ -194,12 +205,30 @@ function renderGeo(geoData: GeoData, map: google.maps.Map, markerLibrary: google
  * and uploads the resulting geo.json file, and updates the link.
  */
 export async function onGenerateClick(): Promise<void> {
-    (document.getElementById('generate')! as HTMLButtonElement).disabled = true;
+    instruct(`<span class="spinner"></span> Ingesting photos...<br/>A full index takes ~30mins for 100,000 photos on a good network; incremental updates will finish in just seconds. If you reload this page, it will pick up where it left off. <pre id="progress">[...preparing bulk indexer...]</pre>`);
     const accessToken = localStorage.getItem('access_token')!;
-    const rootResponse = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
-    if (!rootResponse.ok) { alert(await rootResponse.text()); return; }
-    const rootDriveItem = await rootResponse.json();
-    const geoData = await generateImpl(accessToken, rootDriveItem);
+    const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
+    if (!r.ok) {
+        const reason = await r.text();
+        console.error(reason);
+        instruct(`Error! Try <span id="logout">logging out</span> and then try again.<pre>${escapeHtml(reason)}</pre>`);
+        return;
+    }
+
+    const geoItems: GeoItem[] = [];
+    
+    function progress(update: string[] | GeoItem[]): void {        
+        if (update.length === 0) return;
+        if (typeof update[0] === 'string') {
+            document.getElementById('progress')!.textContent = [`${geoItems.length} photos so far`, ...update].join('\n');
+        }  else {
+            geoItems.push(...update as GeoItem[]);
+            renderGeo(geoItems);
+        }
+    }
+
+    const photosDriveItem = await r.json();
+    const geoData = await generateImpl(progress, accessToken, photosDriveItem);
     await dbPut(geoData);
-    location.reload(); // to re-render the geo data
+    instruct('Geopic <span title="logout" id="logout">⏏</span>');
 }

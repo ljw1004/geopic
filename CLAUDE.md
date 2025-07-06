@@ -33,7 +33,7 @@ GeoPic is a single-page web application that combines OneDrive photos with Googl
 ### Be skeptical, not sycophantic
 Claude should approach all ideas (both those from the user and those from itself) with skepticism and rigor.
 Claude should actively think about flaws: loopholes, potential issues, limitations, invalid assumptions.
-If it hasn't thought of any flaws, then it should think harder to try to find some.
+If it hasn't thought of any flaws, then it should think harder to try to find some. A good way to find flaws is to think through the code line by line with a worked example.
 
 Claude should avoid complimentary language like "excellent!", "perfect!", "great job!", etc. Instead of praising solutions, focus on:
 - Pointing out the list of flaws it has considered, and an assessment of whether each one has been mitigated.
@@ -82,17 +82,12 @@ If you are unclear whether the user has given explicit go-ahead, then ask them:
 
 
 ## TODO
-- Figure out a visual layout. We need: (1) map, (2) filters for date range and maybe freeform text, (3) thumnails, (4) progress indicators while generating, or other general information.
-- Switch to OAuth2 Code Flow with PKCE (based on the sample in ~/code/OneDriveForLocal). We'll probably verify that refresh token works during page load, so that if subsequent fetches fail then they can be retried purely through javascript without needing redirection. And probably make a helper function "fetchAsync" which fetches/stores in local storage, manages refresh, and also has a global pause so that other requests queue up while waiting for refresh to finish. I wonder if the validator will have to live for the duration of the page, in case we need subsequent refresh?
-- Just a silly thing, but the progress indicator in utils.ts progressBar() looks weird: the % should always be to the left of the arrow.
-```
-[===>..16%...........] - 2013
-[===>..18%...........] - 2014
-[====>..21%..........] - 2015
-[==33%=>.............] - 2016
-[====43%=>...........] - 2017
-[=======56%=>........] - 2018
-[========64%=>.......] - 2020
-```
-- In @generateImpl(), if a cache exists but is stale, we should still use any thumbnails that still pertain
-- In @onBodyLoad(), we should proceed to show the map as soon as localCache is available. Fetching of driveItem can populate "status" lazily.
+- Implement the histogram + filter UI currently described in test.ts
+- Switch to OAuth2 Code Flow with PKCE (based on the sample in oauth2-notes.txt). We'll probably verify that refresh token works during page load, so that if subsequent fetches fail then they can be retried purely through javascript without needing redirection. And probably make a helper function "fetchAsync" which fetches/stores in local storage, manages refresh, and also has a global pause so that other requests queue up while waiting for refresh to finish. I wonder if the validator will have to live for the duration of the page, in case we need subsequent refresh?
+- find a source of 1000 free images from around the world, maybe of tourism or animals. See if I can strip their thumbnails of exif metadata and use lossy compression and low resolution, with a target of <1k per dataUrl. Maybe from https://commons.wikimedia.org/wiki/Category:Media_with_locations or from https://www.pic2map.com/random.php
+- Change markers in the map to be square. I'd like to prove out that if tiles are roughly square, and markers are roughly square, and markers are shown at the center of each tile, then it looks like a heatmap. Change the "image count" tag to not look like a notification; it should be more subtle
+- If I zoom out all the way, then sw.lng and ne.lng are meaningless since the view wraps. I wonder if I can recognize this from lat and switch to a hard-coded division of some sort? probably using the map's zoom-level.
+- In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.
+- When you click "Sign in to index..." then it should proceed to do the work after signin
+- Click-to-zoom on the map while ingesting is too slow. Should disable click-to-zoom during this phase.
+- Normalize the instruct() text.

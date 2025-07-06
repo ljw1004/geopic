@@ -18,10 +18,10 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 /**
  * This helper cleans up some idiosyncrasies of the batch response:
  * 1. GET :/content usually returns 302 redirect, which "fetch" follows automatically, but "batch" doesn't.
- *    This functino therefore follows redirects. Similar to fetchAsync, the body is either JSON object or string,
+ *    This function therefore follows redirects. Similar to fetchAsync, the body is either JSON object or string,
  *    depending on whether content-type includes 'application/json'.
  * 2. GET :/content with error response, and PUT :/content with its driveItem response, claim to return application/json body.
- *    They do that when fetched individually. But in the batch response, they return a base64-encoded string of that json.
+ *    They do that when fetched individually. But in the batch response, they return a base64-utf8-encoded string of that json.
  *    This is mentioned here https://learn.microsoft.com/en-us/answers/questions/1352007/using-batching-with-the-graph-api-returns-the-body
  *    Problem is, there's no generic way for us to tell! What if the response itself truly was base64?
  *    what if the response was a real string which also happened to be base-64 decodable?
@@ -46,7 +46,7 @@ export async function postprocessBatchResponse(response: any): Promise<any> {
             }));
         }
         else if (r["headers"]?.["Content-Type"]?.includes('application/json') && typeof r.body === 'string') {
-            r.body = JSON.parse(atob(r.body));
+            r.body = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(r.body), (m) => m.codePointAt(0) as number)));
         }
     }
     await Promise.all(promises);
@@ -94,7 +94,10 @@ export async function rateLimitedBlobFetch<T>(f: (count: number, total: number, 
             const i = queue.shift();
             if (i === undefined) break;
             await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
-            fetches.set(i, fetch(urls[i][0]).then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })));
+            fetches.set(i, fetch(urls[i][0]).
+                then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })).
+                catch(e => e)
+            );
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
         const { i, r } = await Promise.any(fetches.values());
@@ -169,25 +172,28 @@ export async function dbGet<T>(): Promise<T | undefined> {
 
 
 /**
- * Returns a 20-character-wide progress bar string that looks like this:
- *   "===-->            "
- *   "==---15%-->       "
- *   "=======12%==>     "
- * There are '=' characters up to the count1/total fraction of the bar
- * There are '-' characters from there to the (count1+count2)/total fraction of the bar
- * There's a '>' character after all of them
- * If there are at least 6 '=' or '-' characters, then a two-digit percentage replaces near the end.
+ * Returns a 30-character-wide progress bar string that looks like this:
+ *   "5%>               "
+ *   "10%>              "
+ *   "25%->             "
+ *   "-30%->            "
+ *   "==40%->           "
+ *   "==---50%->        "
+ *   "=======60%=>      "
+ *   "==========--100%->"
+ * It's made up of `line*, number, %, line?, >, spaces*`
+ * The '=' characters go up to the count1/total fraction of the bar
+ * and the '-' characters from there to the (count1+count2)/total fraction of the bar
  */
-export function progressBar(count1: number, count2: number, total: number): string {
-    const barWidth = 20;
-    const equalsCount = Math.floor(count1 / total * barWidth);
-    const dashCount = Math.min(Math.floor((count1 + count2) / total * barWidth) - equalsCount, barWidth - equalsCount - 1);
-    const emptyCount = barWidth - equalsCount - dashCount - 1;
-    let bar = '='.repeat(equalsCount) + '-'.repeat(dashCount) + '>' + '.'.repeat(emptyCount);
-
+export function progressBar(count1: number, count2: number, total: number) {
+    const BAR_WIDTH = 30;
+    const equalsCount = Math.floor(count1 / total * BAR_WIDTH);
+    const dashCount = Math.floor((count1 + count2) / total * BAR_WIDTH) - equalsCount;
+    const lines = '='.repeat(equalsCount) + '-'.repeat(dashCount);
     const pct = Math.floor((count1 + count2) / total * 100).toString() + '%';
-    const pos = equalsCount + dashCount >= 5 ? equalsCount + dashCount - 4 : equalsCount + dashCount + 3;
-    return `[${bar.substring(0, pos)}${pct}${bar.substring(pos + pct.length)}]`;
+    if (lines.length < pct.length + 2) return pct + '>' + '.'.repeat(BAR_WIDTH - pct.length - 1);
+    const bar = (lines.slice(0, lines.length-pct.length-2) + pct + lines[lines.length-2]).substring(0,BAR_WIDTH-1) + '>';
+    return bar + '.'.repeat(BAR_WIDTH-bar.length);
 }
 
 
@@ -230,4 +236,10 @@ export async function multipartUpload(log: (count: number, total: number) => voi
         if (!r.ok) throw new FetchError(r, await r.text());
         log(end, bytes.length);
     }
+}
+
+export function escapeHtml(unsafe: string): string {
+    const div = document.createElement('div');
+    div.textContent = unsafe;
+    return div.innerHTML;
 }
