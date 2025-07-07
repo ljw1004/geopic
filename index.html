@@ -170,10 +170,7 @@
             position: absolute;
             top: 0;
             bottom: 0;
-            background-color: rgba(74, 144, 226, 0.2);
-            border: 1px solid #4a90e2;
-            border-top: none;
-            border-bottom: none;
+            background-color: rgba(255, 193, 7, 0.3);
         }
 
         .histogram-selection-edge {
@@ -181,9 +178,12 @@
             top: 0;
             bottom: 0;
             width: 6px;
-            background-color: #4a90e2;
+            background-color: #ffc107;
             cursor: ew-resize;
             pointer-events: auto;
+            opacity: 0;
+            /* Invisible by default but still interactive */
+            transition: opacity 0.2s ease;
         }
 
         .histogram-selection-edge.histogram-left {
@@ -195,13 +195,13 @@
         }
 
         .histogram-selection-edge:hover {
-            background-color: #357abd;
+            opacity: 1;
+            background-color: #e0a800;
         }
 
         .histogram-selection-tooltip {
             position: absolute;
-            top: -25px;
-            background-color: #333;
+            background-color: #e0a800;
             color: white;
             padding: 2px 6px;
             border-radius: 3px;
@@ -210,26 +210,9 @@
             pointer-events: none;
             transform: translateX(-50%);
             display: none;
+            z-index: 15;
         }
 
-        .histogram-selection-tooltip::after {
-            content: '';
-            position: absolute;
-            top: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 4px solid transparent;
-            border-top-color: #333;
-        }
-
-        .histogram-selection-tooltip.histogram-left {
-            left: 0;
-        }
-
-        .histogram-selection-tooltip.histogram-right {
-            right: 0;
-            transform: translateX(50%);
-        }
 
         .histogram-labels {
             display: flex;
@@ -249,7 +232,8 @@
             bottom: 0;
             width: 1px;
             pointer-events: none;
-            z-index: 5; /* Above bars (1-3) but below selection (10) */
+            z-index: 5;
+            /* Above bars (1-3) but below selection (10) */
         }
 
         .histogram-hover-line {
@@ -321,8 +305,6 @@
                         <div class="histogram-selection-fill"></div>
                         <div class="histogram-selection-edge histogram-left"></div>
                         <div class="histogram-selection-edge histogram-right"></div>
-                        <div class="histogram-selection-tooltip histogram-left"></div>
-                        <div class="histogram-selection-tooltip histogram-right"></div>
                     </div>
                 </div>
 
@@ -331,9 +313,11 @@
                     <div class="histogram-label histogram-left"></div>
                     <div class="histogram-label histogram-center"></div>
                     <div class="histogram-label histogram-right"></div>
-                    
-                    <!-- Hover tooltip positioned in label area -->
+
+                    <!-- Hover tooltips positioned in label area -->
                     <div class="histogram-hover-tooltip" style="display: none;"></div>
+                    <div class="histogram-selection-tooltip histogram-left"></div>
+                    <div class="histogram-selection-tooltip histogram-right"></div>
                 </div>
 
                 <!-- Accessibility elements -->

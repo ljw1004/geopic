@@ -278,7 +278,9 @@ export class Histogram {
     private selection: InclusiveDateRange | undefined;
     private fullRange: InclusiveDateRange;
     private tally: Tally | undefined;
-    private currentDrag: undefined | { type: 'pan', startX: number, initialBounds: InclusiveDateRange };
+    private currentDrag: undefined
+        | { type: 'pan', startX: number, initialBounds: InclusiveDateRange }
+        | { type: 'new-selection', startX: number, startY: number, hasBlown5Pixels: boolean, startDate: Numdate, currentDate: Numdate };
     private bi: HistogramBarInfo; // the latest state of the histogram bars (only meaningful if tally is defined)
 
     // DOM interaction
@@ -295,11 +297,10 @@ export class Histogram {
     private labelLeft: HTMLElement;
     private labelCenter: HTMLElement;
     private labelRight: HTMLElement;
-    private focusIndicator: HTMLElement;
-    private srAnnouncements: HTMLElement;
+    // private focusIndicator: HTMLElement;
+    // private srAnnouncements: HTMLElement;
     private hoverIndicator: HTMLElement;
     private hoverTooltip: HTMLElement;
-    private currentHoverDate: Numdate | undefined;
 
     public onSelectionChange: (selection: { start: number, end: number } | undefined) => void = () => { };
 
@@ -317,14 +318,14 @@ export class Histogram {
         this.selectionFill = this.selectionOverlay.querySelector('.histogram-selection-fill')!;
         this.selectionEdgeLeft = this.selectionOverlay.querySelector('.histogram-selection-edge.histogram-left')!;
         this.selectionEdgeRight = this.selectionOverlay.querySelector('.histogram-selection-edge.histogram-right')!;
-        this.selectionTooltipLeft = this.selectionOverlay.querySelector('.histogram-selection-tooltip.histogram-left')!;
-        this.selectionTooltipRight = this.selectionOverlay.querySelector('.histogram-selection-tooltip.histogram-right')!;
         this.labelsContainer = container.querySelector('.histogram-labels')!;
         this.labelLeft = this.labelsContainer.querySelector('.histogram-label.histogram-left')!;
         this.labelCenter = this.labelsContainer.querySelector('.histogram-label.histogram-center')!;
         this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right')!;
-        this.focusIndicator = container.querySelector('.histogram-focus-indicator')!;
-        this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
+        this.selectionTooltipLeft = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-left')!;
+        this.selectionTooltipRight = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-right')!;
+        // this.focusIndicator = container.querySelector('.histogram-focus-indicator')!;
+        // this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
         this.hoverIndicator = this.chartArea.querySelector('.histogram-hover-indicator')!;
         this.hoverTooltip = this.labelsContainer.querySelector('.histogram-hover-tooltip')!;
         this.container.addEventListener('wheel', this.handleMouseWheel.bind(this));
@@ -343,7 +344,6 @@ export class Histogram {
         // Logical state
         this.tally = undefined;
         this.currentDrag = undefined;
-        this.currentHoverDate = undefined;
         this.bounds = { start: 0, end: 0 };
         this.selection = undefined;
         this.fullRange = { start: 0, end: 0 };
@@ -357,6 +357,20 @@ export class Histogram {
             this.fullRange = savedState.fullRange || { start: 0, end: 0 };
         }
     }
+
+    /**
+     * Saves current state to localStorage.
+     * INVARIANT: Only persists bounds, selection, and fullRange as these need to survive page reloads.
+     */
+    private saveState(): void {
+        const state = {
+            bounds: this.bounds,
+            selection: this.selection,
+            fullRange: this.fullRange,
+        };
+        localStorage.setItem('histogram-state', JSON.stringify(state));
+    }
+
 
     /**
      * Sets the data for the histogram, recomputs bounds, saves state, and updates the DOM.
@@ -391,7 +405,7 @@ export class Histogram {
             this.saveState();
         }
 
-        this.recomputeDOM();
+        this.recomputeDOM_chart();
     }
 
     private handleMouseWheel(event: WheelEvent): void {
@@ -420,41 +434,74 @@ export class Histogram {
         // Update
         this.bounds = constrainedBounds;
         this.saveState();
-        this.recomputeDOM();
+        this.recomputeDOM_chart();
     }
 
     private handleMouseDown(event: MouseEvent): void {
-        if (this.container.style.cursor !== 'grab') return;
-        this.currentDrag = {
-            type: 'pan',
-            startX: event.clientX,
-            initialBounds: { ...this.bounds }
-        };
-        this.container.style.cursor = 'grabbing';
-        event.preventDefault();
+        event.preventDefault(); // prevent text selection
+        if (!this.tally) return; // No data, no interaction
+        const rect = this.chartArea.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        if (x < 0 || x >= rect.width) return; // Click outside chart area
+
+        if (this.container.style.cursor === 'grab') {
+            // A pan operation (the cursor state is updated by keyboard handlers)
+            this.currentDrag = {
+                type: 'pan',
+                startX: event.clientX,
+                initialBounds: { ...this.bounds }
+            };
+            this.container.style.cursor = 'grabbing';
+            event.preventDefault();
+            return;
+        } else {
+            // A new-selection operation
+            const bar = Math.floor(x / rect.width * this.bi.count);
+            const date = this.bi.find(bar)
+            this.currentDrag = {
+                type: 'new-selection',
+                startX: event.clientX,
+                startY: event.clientY,
+                startDate: date,
+                currentDate: date,
+                hasBlown5Pixels: false,
+            };
+        }
+        // TODO: dragging a selection edge
     }
 
     private handleMouseMove(event: MouseEvent): void {
-        // Handles the hover indicator
+        // Handles hover and edge-hover
+        // (Drag mouse move events are in handleGlobalMouseMove, to capture drags that go beyond bounds)
         const chartRect = this.chartArea.getBoundingClientRect();
-        if (!this.tally || this.currentDrag || event.clientX < 0 || event.clientX >= chartRect.width) {
-            this.hideHoverIndicator();
+        const x = event.clientX - chartRect.left;
+        if (!this.tally || this.currentDrag || x < 0 || x >= chartRect.width) {
+            this.hideHoverIndicators('all');
             return;
         }
 
-        // Calculate which bar the mouse is over
-        const bar = Math.floor((event.clientX - chartRect.left) / chartRect.width * this.bi.count);
-        const date = this.bi.find(bar);
-        if (date === this.currentHoverDate) return;
-        this.currentHoverDate = date;
-        const center = Math.round(this.bi.left(date) + this.bi.width / 2);
-        this.hoverIndicator.style.left = `${center}px`;
-        this.hoverIndicator.style.display = 'block';
-        const month = MONTHS[Math.floor(date / 100) % 100];
-        const text = this.bi.granularity === 'months' ? `${month} ${Math.floor(date / 10000)}` : `${date % 100} ${month}`;
-        this.hoverTooltip.textContent = `${text}`;
-        this.hoverTooltip.style.left = `${center}px`;
-        this.hoverTooltip.style.display = 'block';
+        // Check if we're hovering over a selection edge using DOM hit-testing
+        const edgeTarget = event.target === this.selectionEdgeLeft ? 'left' : event.target === this.selectionEdgeRight ? 'right' : undefined;
+
+        if (this.selection && edgeTarget) {
+            // We're hovering over a selection edge, show tooltips and hide bar hover
+            this.hideHoverIndicators('hover');
+            this.selectionTooltipLeft.style.display = edgeTarget === 'left' ? 'block' : 'none';
+            this.selectionTooltipRight.style.display = edgeTarget === 'right' ? 'block' : 'none';
+        } else {
+            // We're hovering over the chart, show bar hover and hide edge tooltips
+            this.hideHoverIndicators('selection');
+            const bar = Math.floor(x / chartRect.width * this.bi.count);
+            const date = this.bi.find(bar);
+            const center = Math.round(this.bi.left(date) + this.bi.width / 2);
+            this.hoverIndicator.style.left = `${center}px`;
+            this.hoverIndicator.style.display = 'block';
+            const month = MONTHS[Math.floor(date / 100) % 100];
+            const text = this.bi.granularity === 'months' ? `${month} ${Math.floor(date / 10000)}` : `${date % 100} ${month}`;
+            this.hoverTooltip.textContent = `${text}`;
+            this.hoverTooltip.style.left = `${center}px`;
+            this.hoverTooltip.style.display = 'block';
+        }
     }
 
     private handleGlobalMouseMove(event: MouseEvent): void {
@@ -477,29 +524,70 @@ export class Histogram {
             const newBounds = { start: dateToNum(startDate), end: dateToNum(endDate) };
             if (newBounds.start !== this.bounds.start || newBounds.end !== this.bounds.end) {
                 this.bounds = newBounds;
-                this.recomputeDOM();
+                this.recomputeDOM_chart();
             }
+        } else if (this.currentDrag?.type === 'new-selection') {
+            const moveDistance = Math.max(Math.abs(event.clientX - this.currentDrag.startX), Math.abs(event.clientY - this.currentDrag.startY));
+            this.currentDrag.hasBlown5Pixels ||= moveDistance >= 5;
+            if (!this.currentDrag.hasBlown5Pixels) return; // Not enough movement yet
+
+            const rect = this.chartArea.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const bar = Math.floor(x / rect.width * this.bi.count);
+            const date = this.bi.find(bar);
+            this.currentDrag.currentDate = date;
+            this.selection = {
+                start: Math.min(this.currentDrag.startDate, date),
+                end: Math.max(this.currentDrag.startDate, date)
+            };
+            this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
+            this.selectionTooltipLeft.style.display = event.clientX < this.currentDrag.startX ? 'block' : 'none';
+            this.selectionTooltipRight.style.display = event.clientX > this.currentDrag.startX ? 'block' : 'none';
         }
     }
 
-    private handleGlobalMouseUp(_event: MouseEvent): void {
+    private handleGlobalMouseUp(event: MouseEvent): void {
         if (this.currentDrag?.type === 'pan') {
             this.currentDrag = undefined;
             if (this.container.style.cursor === 'grabbing') {
                 this.container.style.cursor = 'grab';
             }
+            this.hideHoverIndicators('all');
             this.saveState();
+        } else if (this.currentDrag?.type === 'new-selection') {
+            const moveDistance = Math.max(Math.abs(event.clientX - this.currentDrag.startX), Math.abs(event.clientY - this.currentDrag.startY));
+            this.currentDrag.hasBlown5Pixels ||= moveDistance >= 5;
+
+            if (!this.currentDrag.hasBlown5Pixels && this.selection) {
+                // Click to deselect
+                this.selection = undefined;
+                this.onSelectionChange(undefined);
+            } else {
+                this.onSelectionChange(this.selection);
+            }
+
+            this.currentDrag = undefined;
+            this.saveState();
+            this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
         }
     }
 
     private handleMouseLeave(_event: MouseEvent): void {
-        this.hideHoverIndicator();
+        this.hideHoverIndicators('all');
     }
 
-    private hideHoverIndicator(): void {
-        this.hoverIndicator.style.display = 'none';
-        this.hoverTooltip.style.display = 'none';
-        this.currentHoverDate = undefined;
+    /**
+     * Hides hover indicators. Edge visibility is now controlled by CSS.
+     */
+    private hideHoverIndicators(indicators: 'hover' | 'selection' | 'all'): void {
+        if (indicators === 'hover' || indicators === 'all') {
+            this.hoverIndicator.style.display = 'none';
+            this.hoverTooltip.style.display = 'none';
+        }
+        if (indicators === 'selection' || indicators === 'all') {
+            this.selectionTooltipLeft.style.display = 'none';
+            this.selectionTooltipRight.style.display = 'none';
+        }
     }
 
     private handleKeyDown(_event: KeyboardEvent): void {
@@ -541,10 +629,11 @@ export class Histogram {
     }
 
     /**
-     * Updates all DOM elements to match current state
+     * Updates chart DOM elements to match the current state (bars, labels),
+     * and also the selection overlay if present.
      * Stores derived information in this.bi
      */
-    private recomputeDOM(): void {
+    private recomputeDOM_chart(): void {
         this.chartArea.querySelectorAll('.histogram-bar').forEach(bar => (bar as HTMLElement).style.display = 'none');
 
         if (!this.tally) {
@@ -555,9 +644,9 @@ export class Histogram {
             return
         }
 
-        this.bi = this.recomputeDOM_bars(this.tally.dateCounts);
+        this.bi = this.recomputeDOM_chart_bars(this.tally.dateCounts);
+        this.recomputeDOM_chart_timeLabels();
         this.recomputeDOM_selectionOverlay();
-        this.recomputeDOM_timeLabels(this.bi);
     }
 
     /**
@@ -567,7 +656,7 @@ export class Histogram {
      * bi.bounds represents the ranges of the bars which in weeks/months view may be slightly larger
      * than this.bounds (because they're enlarged to the nearest bar boundaries).
      */
-    private recomputeDOM_bars(dateCounts: Map<Numdate, OneDayTally>): HistogramBarInfo {
+    private recomputeDOM_chart_bars(dateCounts: Map<Numdate, OneDayTally>): HistogramBarInfo {
         const [chartWidth, chartHeight] = [this.chartArea.offsetWidth, this.chartArea.offsetHeight];
         const dayCount = dayInterval(this.bounds);
         const granularity = dayCount <= 140 ? 'days' : dayCount < 980 ? 'weeks' : 'months'; // at most 140 bars in days/weeks view
@@ -679,22 +768,11 @@ export class Histogram {
         return bi;
     }
 
-    private recomputeDOM_selectionOverlay(): void {
-        if (!this.selection) {
-            this.selectionOverlay.style.display = 'none';
-            return;
-        }
 
-        this.selectionOverlay.style.display = 'block';
 
-        // TODO: calculate selection position based on bounds and selection
-        // - convert selection dates to pixel positions
-        // - position fill and edges appropriately
-        // - ensure edges are draggable even if clipped
-    }
-
-    private recomputeDOM_timeLabels(bi: HistogramBarInfo): void {
+    private recomputeDOM_chart_timeLabels(): void {
         if (!this.tally) return;
+        const bi = this.bi;
 
         // Our goal is to show a few labels at "natural" marker points, years or months or days,
         // depending on the range of the data. We'll first try year-markers to see if there
@@ -787,17 +865,36 @@ export class Histogram {
         }
     }
 
-    /**
-     * Saves current state to localStorage.
-     * INVARIANT: Only persists bounds, selection, and fullRange as these need to survive page reloads.
-     */
-    private saveState(): void {
-        const state = {
-            bounds: this.bounds,
-            selection: this.selection,
-            fullRange: this.fullRange,
-        };
-        localStorage.setItem('histogram-state', JSON.stringify(state));
+    private recomputeDOM_selectionOverlay(): void {
+        if (!this.selection) {
+            this.selectionOverlay.style.display = 'none';
+            return;
+        }
+
+        this.selectionOverlay.style.display = 'block';
+
+        const visualStart = this.bi.snap(this.selection.start);
+        const visualEnd = this.bi.snap(this.selection.end);
+        const left = this.bi.left(visualStart);
+        const width = this.bi.left(visualEnd) + this.bi.width - left;
+
+        // Selection fill
+        this.selectionFill.style.left = `${left}px`;
+        this.selectionFill.style.width = `${width}px`;
+
+        // Draggable edges. They're always present; CSS opacity controls whether they'll be visible.
+        this.selectionEdgeLeft.style.left = `${left - 3}px`; // assume 6px width; centered on boundary
+        this.selectionEdgeRight.style.left = `${left + width - 3}px`;
+
+        // Tooltips at the edge centers (CSS translateX(-50%) will center them)
+        // We'll always print full date regardless of graph granularity, since selection is an important user concept
+        const fmt = (date: Numdate): string => `${date % 100} ${MONTHS[Math.floor(date / 100) % 100]} ${Math.floor(date / 10000)}`;
+        this.selectionTooltipLeft.style.left = `${left}px`; // Center of left edge
+        this.selectionTooltipRight.style.left = `${left + width}px`; // Center of right edge
+        this.selectionTooltipLeft.style.display = 'none';
+        this.selectionTooltipRight.style.display = 'none';
+        this.selectionTooltipLeft.textContent = fmt(this.selection.start);
+        this.selectionTooltipRight.textContent = fmt(this.selection.end);
     }
 }
 
@@ -808,6 +905,9 @@ export function testHistogram(tally: Tally) {
     if (!histogram) {
         const container = document.getElementById('histogram-container') as HTMLElement;
         histogram = new Histogram(container);
+        histogram.onSelectionChange = (selection) => {
+            console.log('Histogram selection changed:', selection);
+        };
     }
     histogram.setData(tally);
 }
