@@ -185,7 +185,7 @@ function expandToMinimum(range) {
  *   is undefined). Fully zoomed in is seven days. Fully zoomed out is the full range of dates in the
  *   'data.tally' field, or seven days, whichever is larger. In future zooms will be accompanied by
  *   a brief 100-200ms animation, but for now they'll be instantaneous.
- * - When the user clicks and drags while holding down Option (or Alt on Windows) then this is a pan:
+ * - When the user clicks and drags while holding down Space then this is a pan:
  *   the bounds will be updated while the user drags. No events are fired.)
  * - When the user clicks and releases anywhere except a draggable edge, and a selection is present,
  *   then it erases the selection and fires the onSelectionChange event. A click and release is defined
@@ -252,8 +252,8 @@ export class Histogram {
     selection;
     fullRange;
     tally;
-    currentDrag; // TODO: define proper type for drag state
-    // DOM elements
+    currentDrag;
+    // DOM interaction
     container;
     chartArea;
     barTemplate;
@@ -276,7 +276,7 @@ export class Histogram {
      */
     constructor(container) {
         this.container = container;
-        // Find all DOM elements
+        // Set up DOM interaction
         this.chartArea = container.querySelector('.histogram-chart');
         this.barTemplate = this.chartArea.querySelector('.histogram-bar');
         this.selectionOverlay = container.querySelector('.histogram-selection');
@@ -291,14 +291,16 @@ export class Histogram {
         this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right');
         this.focusIndicator = container.querySelector('.histogram-focus-indicator');
         this.srAnnouncements = container.querySelector('.histogram-sr-announcements');
-        // Set up event handlers
         this.container.addEventListener('wheel', this.handleMouseWheel.bind(this));
         this.container.addEventListener('mousedown', this.handleMouseDown.bind(this));
-        this.container.addEventListener('mousemove', this.handleMouseMove.bind(this));
-        this.container.addEventListener('mouseup', this.handleMouseUp.bind(this));
         this.container.addEventListener('keydown', this.handleKeyDown.bind(this));
         this.selectionEdgeLeft.addEventListener('dragstart', (e) => e.preventDefault());
         this.selectionEdgeRight.addEventListener('dragstart', (e) => e.preventDefault());
+        document.addEventListener('keydown', this.handleGlobalKeyDown.bind(this));
+        document.addEventListener('keyup', this.handleGlobalKeyUp.bind(this));
+        document.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        document.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        document.addEventListener('visibilitychange', this.handleVisibilityChange.bind(this));
         // Logical state
         this.tally = undefined;
         this.currentDrag = undefined;
@@ -379,16 +381,67 @@ export class Histogram {
         this.recomputeDOM();
     }
     handleMouseDown(event) {
-        // TODO: implement!
+        if (this.container.style.cursor !== 'grab')
+            return;
+        this.currentDrag = {
+            type: 'pan',
+            startX: event.clientX,
+            initialBounds: { ...this.bounds }
+        };
+        this.container.style.cursor = 'grabbing';
+        event.preventDefault();
     }
     handleMouseMove(event) {
+        if (this.currentDrag?.type === 'pan') {
+            const chartWidth = this.chartArea.offsetWidth;
+            const dayCount = dayInterval(this.currentDrag.initialBounds);
+            // What's the furthest we can pan without exceeding fullRange?
+            const minDeltaDays = dayInterval({ start: this.currentDrag.initialBounds.start, end: this.fullRange.start }) - 1;
+            const maxDeltaDays = dayInterval({ start: this.currentDrag.initialBounds.end, end: this.fullRange.end }) - 1;
+            const deltaX = this.currentDrag.startX - event.clientX; // represents the change we wish to make
+            const rawDeltaDays = Math.round(deltaX / chartWidth * dayCount);
+            const deltaDays = Math.min(maxDeltaDays, Math.max(minDeltaDays, rawDeltaDays));
+            // Calculate new bounds based on deltaDays
+            const startDate = numToDate(this.currentDrag.initialBounds.start);
+            const endDate = numToDate(this.currentDrag.initialBounds.end);
+            startDate.setDate(startDate.getDate() + deltaDays);
+            endDate.setDate(endDate.getDate() + deltaDays);
+            const newBounds = { start: dateToNum(startDate), end: dateToNum(endDate) };
+            if (newBounds.start !== this.bounds.start || newBounds.end !== this.bounds.end) {
+                this.bounds = newBounds;
+                this.recomputeDOM();
+            }
+        }
+    }
+    handleMouseUp(_event) {
+        if (this.currentDrag?.type === 'pan') {
+            this.currentDrag = undefined;
+            if (this.container.style.cursor === 'grabbing') {
+                this.container.style.cursor = 'grab';
+            }
+            this.saveState();
+        }
+    }
+    handleKeyDown(_event) {
         // TODO: implement!
     }
-    handleMouseUp(event) {
-        // TODO: implement!
+    handleGlobalKeyDown(event) {
+        if (event.code === 'Space')
+            this.container.style.cursor = 'grab';
     }
-    handleKeyDown(event) {
-        // TODO: implement!
+    handleGlobalKeyUp(event) {
+        if (event.code === 'Space')
+            this.container.style.cursor = 'default';
+    }
+    handleVisibilityChange() {
+        if (document.hidden) {
+            this.container.style.cursor = 'default';
+            // End any current drag operation when page loses focus
+            if (this.currentDrag?.type === 'pan') {
+                this.currentDrag = undefined;
+                this.saveState();
+            }
+        }
     }
     /**
      * Returns a bar from the pool, or creates a new one if none are available.
@@ -432,7 +485,6 @@ export class Histogram {
         const [chartWidth, chartHeight] = [this.chartArea.offsetWidth, this.chartArea.offsetHeight];
         const dayCount = dayInterval(this.bounds);
         const granularity = dayCount <= 140 ? 'days' : dayCount < 980 ? 'weeks' : 'months'; // at most 140 bars in days/weeks view
-        console.log(`Recomputing bars: granularity=${granularity}, dayCount=${dayCount}, bounds=${JSON.stringify(this.bounds)}`);
         let bi;
         let barCounts; // it's called "OneDayTally" but it's really the OneBarTally...
         if (granularity === 'days') {
