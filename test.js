@@ -505,6 +505,12 @@ export class Histogram {
                 start: Math.min(this.currentDrag.startDate, date),
                 end: Math.max(this.currentDrag.startDate, date)
             };
+            // in case of months/weeks view, our end date will be the last day of the bar.
+            if (event.clientX > this.currentDrag.startX) {
+                const d = numToDate(this.bi.find(this.bi.bar(this.selection.end) + 1));
+                d.setDate(d.getDate() - 1);
+                this.selection.end = dateToNum(d);
+            }
             this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
             this.selectionTooltipLeft.style.display = event.clientX < this.currentDrag.startX ? 'block' : 'none';
             this.selectionTooltipRight.style.display = event.clientX > this.currentDrag.startX ? 'block' : 'none';
@@ -618,11 +624,13 @@ export class Histogram {
         const granularity = dayCount <= 140 ? 'days' : dayCount < 980 ? 'weeks' : 'months'; // at most 140 bars in days/weeks view
         let bi;
         let barCounts; // it's called "OneDayTally" but it's really the OneBarTally...
+        const bar = (date) => dayInterval({ start: this.bounds.start, end: date }) - 1;
         if (granularity === 'days') {
             bi = {
                 granularity,
                 bounds: { ...this.bounds },
-                left: (date) => ((dayInterval({ start: this.bounds.start, end: date }) - 1) / dayCount) * chartWidth,
+                bar,
+                left: (date) => bar(date) / dayCount * chartWidth,
                 width: chartWidth / dayCount,
                 find: (bar) => dateToNum(new Date(numToDate(this.bounds.start).setDate(numToDate(this.bounds.start).getDate() + bar))),
                 count: dayCount,
@@ -646,10 +654,12 @@ export class Histogram {
                 endSnap.setDate(endSnap.getDate() + 6); // final day of final week
                 bounds = { start: dateToNum(startSnap), end: dateToNum(endSnap) };
                 barCount = dayInterval(bounds) / 7;
+                const bar = (date) => (dayInterval({ start: bounds.start, end: date }) - 1) / 7;
                 bi = {
                     granularity,
                     bounds: { ...this.bounds },
-                    left: (date) => (dayInterval({ start: bounds.start, end: date }) - 1) / 7 / barCount * chartWidth,
+                    bar,
+                    left: (date) => bar(date) / barCount * chartWidth,
                     width: chartWidth / barCount,
                     find: (bar) => dateToNum(new Date(numToDate(bounds.start).setDate(numToDate(bounds.start).getDate() + bar * 7))),
                     count: barCount,
@@ -666,10 +676,12 @@ export class Histogram {
                     end: Math.floor(this.bounds.end / 100) * 100 + 31, // this over-approximation is safe because we only use it for bounds checking
                 };
                 barCount = monthInterval(bounds);
+                const bar = (date) => (monthInterval({ start: bounds.start, end: date }) - 1);
                 bi = {
                     granularity,
                     bounds,
-                    left: (date) => ((monthInterval({ start: bounds.start, end: date }) - 1) / barCount) * chartWidth,
+                    bar,
+                    left: (date) => bar(date) / barCount * chartWidth,
                     width: chartWidth / barCount,
                     find: (bar) => {
                         const month = Math.floor((bounds.start / 100) % 100) - 1 + bar; // 0-based, might be >12 (but we'll modulo it next)
