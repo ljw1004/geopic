@@ -1,6 +1,11 @@
 import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
+
+/**
+ * Numdate is a compact way of storing dates, in integer numbers, YYYYMMDD format.
+ */
+export type Numdate = number;
 
 /**
  * A position. lng might be negative. Beware of the antimeridian (where -180 and +180 meet)...
@@ -23,7 +28,7 @@ export interface GeoData {
     eTag: string; // for cache validation
     immediateChildCount: number; // the immediate children are the first items in geoItems
 
-    folders: string[]; // Within a WorkItem, folders[0] is always that workitem's folder
+    folders: string[]; // Lowercase. Within a WorkItem, folders[0] is always that workitem's folder
     geoItems: GeoItem[];
 }
 
@@ -33,11 +38,19 @@ export interface GeoData {
 export interface GeoItem {
     id: string; // OneDrive ID
     position: Position; // longitude and latitude
-    date: number; // in format "YYYYMMDD" e.g. 20241231 for 31st December 2024
+    date: Numdate; // in format "YYYYMMDD" e.g. 20241231 for 31st December 2024
     thumbnailUrl: string; // typically a data: url
-    name: string; // filename
+    name: string; // filename, lowercase
     folderIndex: number; // an index into GeoData.folders[] array
-    tags: string[]; 
+    tags: string[]; // lowercase
+}
+
+/**
+ * Input to asClusters() -- a filter on which GeoItems to include in the clusters
+ */
+export interface Filter {
+    dateRange: { start: Numdate, end: Numdate } | undefined; // in the same "YYYYMMDD" format as GeoItem.date. End is exclusive.
+    text: string | undefined; // Lowercase
 }
 
 /**
@@ -46,25 +59,23 @@ export interface GeoItem {
 export interface Cluster {
     someItems: GeoItem[];
     totalItems: number;
-    bounds: {sw: Position, ne: Position};
+    bounds: { sw: Position, ne: Position };
+    center: Position;
 }
 
 /**
- * Input to asClusters() -- a filter on which GeoItems to include in the clusters
+ * Output from asClusters() -- a tally of every single GeoItem, broken down by date and how many items
+ * there were on each date, broken down by how many were in map bounds, and how many satisfied the text filter if any.
  */
-export interface Filter {
-    dateRange: { start: number, end: number } | undefined; // in the same "YYYYMMDD" format as GeoItem.date. End is exclusive.
-    text: string | undefined; // Can include slashes, e.g. "2012/01"
-}
+export type Tally = {
+    dateCounts: Map<Numdate, OneDayTally>;
+};
 
 /**
- * Output from asClusters() -- a summary of all GeoItems in bounds, including those that 'filter' filters out
- * Thanks to the magic of Javascript sparse arrays, the full range is
- * dateCounts.findIndex(c => c) <= date < dateCounts.length
+ * Tallies for a single day. If no filter is being used, then we store counts in 'outFilter'.
  */
-export interface InBoundsSummary {
-    dateCounts: Map<number, number>; // dateCounts[YYYYMMDD] is the number of GeoItems in map-bounds on that date
-}
+export type OneDayTally = { [bounds in 'inBounds' | 'outBounds']: { [filter in 'inFilter' | 'outFilter']: number } };
+
 
 /**
  * For creating an index of GeoItems and CacheData, we use "Workitems":
@@ -175,7 +186,7 @@ function createGeoItem(driveItem: any, folderIndex: number): GeoItem {
 
     return {
         id: driveItem.id,
-        name: driveItem.name,
+        name: driveItem.name.toLowerCase(),
         position: {
             lat: Math.round(driveItem.location.latitude * 100000) / 100000,
             lng: Math.round(driveItem.location.longitude * 100000) / 100000,
@@ -183,7 +194,7 @@ function createGeoItem(driveItem: any, folderIndex: number): GeoItem {
         date,
         thumbnailUrl: driveItem.thumbnails[0].small.url,
         folderIndex,
-        tags: (driveItem.tags || []).map(t => t.name),
+        tags: (driveItem.tags || []).map((t: any) => t.name.toLowerCase()),
     };
 }
 
@@ -217,7 +228,7 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
  * 
  * TODO: when cache is invalid but exists, any cached geoItems (with thumbnails) are still valid and should be used.
  */
-export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, accessToken: string, photosDriveItem: any): Promise<GeoData> {
+export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, accessToken: string, photosDriveItem: any): Promise<GeoData> {
     const waiting = new Map<string, WorkItem>();
     const toProcess: WorkItem[] = [];
     const toFetch: WorkItem[] = [createStartWorkItem(photosDriveItem, [])];
@@ -227,7 +238,7 @@ export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, a
         return (s) => {
             const bar = progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal);
             const folder = item.path.length === 0 ? ['Pictures'] : item.path;
-            progress([`[${bar}]`, folder.join('/'), s || '']);
+            progress([`[${bar}]`, folder.join('/'), s || ' ']);
         }
     }
 
@@ -247,12 +258,12 @@ export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, a
                 progress(cacheResult.body.geoItems);
                 continue;
             }
-            const cache: Map<string,string> = new Map(); // if not the whole cache, we'll at least re-use thumbnails
+            const cache: Map<string, string> = new Map(); // if not the whole cache, we'll at least re-use thumbnails
             if (cacheResult.status === 200) {
                 const cacheGeoData = cacheResult.body as GeoData;
-                for (const cachedItem of cacheGeoData.geoItems.splice(0,cacheGeoData.immediateChildCount)) {
+                for (const cachedItem of cacheGeoData.geoItems.splice(0, cacheGeoData.immediateChildCount)) {
                     cache.set(cachedItem.id, cachedItem.thumbnailUrl);
-                }                    
+                }
             }
 
             // Kick off subfolders, and gather immediate children (but resolving their thumbnails is deferred until our finish-action)
@@ -271,14 +282,14 @@ export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, a
                 }
             }
             item.data.immediateChildCount = item.data.geoItems.length;
-            if (item.data.immediateChildCount === 0) item.data.folders.push(item.path.join('/'));
+            if (item.data.immediateChildCount === 0) item.data.folders.push(item.path.join('/').toLowerCase());
 
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
                 await resolveThumbnails(log(item), item);
                 progress(item.data.geoItems);
                 toFetch.unshift(createEndWorkItem(item));
-            } else {                
+            } else {
                 toFetch.sort((a, b) => cacheFilename(a.path).localeCompare(cacheFilename(b.path))); // alphabetical order to finish off subtrees quicker
                 waiting.set(cacheFilename(item.path), item);
             }
@@ -349,6 +360,14 @@ export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, a
 }
 
 /**
+ * Given a longitude, normalizes it to the range [-180, 180).
+ * Used for instance if you want to calculate "lng1 + width" which might cross the antimeridian.
+ */
+function lngWrap(lng: number): number {
+    return (lng + 180 + 360) % 360 - 180;
+}
+
+/**
  * This function takes a map viewport, represented by (1) its lat/lng bounds, (2) its pixel dimensions.
  * It splits this into "clusters" (tiles), each cluster being an approximately 60x60 square of pixels (give or take;
  * if the pixelWidth/Height don't neatly divide into 60 then we'll use however many clusters best fit).
@@ -359,11 +378,11 @@ export async function generateImpl(progress: (p:string[] | GeoItem[]) => void, a
  * (1) a list of up to 20 items in that cluster, (2) the total count of items in that cluster.
  * The tiling is "stable": when the user pans the map, cluster boundaries remain fixed.
  */
-export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[], filter: Filter): [Cluster[], InBoundsSummary] {
+export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[], filter: Filter): [Cluster[], Tally] {
     const TILE_SIZE_PX = 60;
     const MAX_ITEMS_PER_TILE = 40;
-    const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360)/ Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
-    const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: (Math.floor(sw.lng / tileSize) * tileSize + 360 + 180) % 360 - 180 };
+    const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
+    const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: lngWrap((Math.floor(sw.lng / tileSize) * tileSize)) };
     const numTilesX = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
     const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
     const tiles: Cluster[] = [];
@@ -373,24 +392,32 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, items
                 someItems: [],
                 totalItems: 0,
                 bounds: {
-                    sw: { lat: swSnap.lat + y * tileSize, lng: swSnap.lng + x * tileSize },
-                    ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: swSnap.lng + (x + 1) * tileSize }
-                }
+                    sw: { lat: swSnap.lat + y * tileSize, lng: lngWrap(swSnap.lng + x * tileSize) },
+                    ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: lngWrap(swSnap.lng + (x + 1) * tileSize) }
+                },
+                center: { lat: swSnap.lat + (y + 0.5) * tileSize, lng: lngWrap(swSnap.lng + (x + 0.5) * tileSize) }
             });
         }
     }
-    const dateCounts: Map<number, number> = new Map();
 
+    const dateCounts: Map<Numdate, OneDayTally> = new Map();
+
+    // CARE! Following loop is hot; goal is 50,000 items in 5ms, but we're currently at 10ms
     for (const item of items) {
+        let tally = dateCounts.get(item.date); // TODO: this lookup costs 2ms
+        if (!tally) {
+            tally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
+            dateCounts.set(item.date, tally);
+        }
         const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
         const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
-        if (x < 0 || x >= numTilesX || y < 0 || y >= numTilesY) continue;
-        dateCounts.set(item.date, (dateCounts.get(item.date) || 0)+1);
-        // dateCounts includes all items, but tiles only includes those that match the filter
-        if (filter.dateRange && (item.date < filter.dateRange.start || item.date >= filter.dateRange.end)) continue;
-        if (filter.text && !item.name.toLowerCase().includes(filter.text.toLowerCase())) continue;
+        const inBounds = (x >= 0 && x < numTilesX && y >= 0 && y < numTilesY);
+        const inFilter = filter.text !== undefined && (item.name.includes(filter.text) || item.tags.some(tag => tag.includes(filter.text as string)));
+        const inDateRange = filter.dateRange === undefined || (item.date >= filter.dateRange.start && item.date < filter.dateRange.end);
+        tally[inBounds ? 'inBounds' : 'outBounds'][inFilter ? 'inFilter' : 'outFilter']++;
+        if ((filter.text && !inFilter) || !inBounds || !inDateRange) continue;
         const tile = tiles[y * numTilesX + x];
-        if (tile.someItems.length < MAX_ITEMS_PER_TILE) tile.someItems.push(item);
+        if (tile.someItems.length < MAX_ITEMS_PER_TILE) tile.someItems.push(item); // TODO: this push costs 1ms
         tile.totalItems++;
     }
     return [tiles.filter(t => t.someItems.length > 0), { dateCounts }];

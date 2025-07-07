@@ -89,7 +89,9 @@
         }
 
         #filters {
-            margin: 1ex;
+            padding: 0;
+            margin-top: 5px;
+            margin-bottom: 5px;
         }
 
         #thumbnails-scroll-area {
@@ -118,10 +120,9 @@
         }
 
         #histogram-container {
-            margin-top: 10px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
+            margin: 0;
+            padding: 0;
+            border: none;
             outline: none;
             /* Remove default focus outline */
         }
@@ -133,9 +134,6 @@
         .histogram-chart {
             position: relative;
             height: 60px;
-            background-color: #fafafa;
-            border: 1px solid #e0e0e0;
-            border-radius: 3px;
             overflow: hidden;
         }
 
@@ -237,20 +235,13 @@
         .histogram-labels {
             display: flex;
             justify-content: space-between;
-            margin-top: 5px;
-            height: 20px;
-            font-size: 11px;
+            height: 10px;
+            font-size: 10px;
             color: #666;
         }
 
         .histogram-label {
-            position: relative;
-        }
-
-        .histogram-label.histogram-center {
             position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
         }
 
         .histogram-focus-indicator {

@@ -1,5 +1,5 @@
 import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
 ;
 function cacheFilename(path) {
     if (path.length === 0)
@@ -68,7 +68,7 @@ function createGeoItem(driveItem, folderIndex) {
     const date = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate(); // YYYYMMDD number
     return {
         id: driveItem.id,
-        name: driveItem.name,
+        name: driveItem.name.toLowerCase(),
         position: {
             lat: Math.round(driveItem.location.latitude * 100000) / 100000,
             lng: Math.round(driveItem.location.longitude * 100000) / 100000,
@@ -76,7 +76,7 @@ function createGeoItem(driveItem, folderIndex) {
         date,
         thumbnailUrl: driveItem.thumbnails[0].small.url,
         folderIndex,
-        tags: (driveItem.tags || []).map(t => t.name),
+        tags: (driveItem.tags || []).map((t) => t.name.toLowerCase()),
     };
 }
 /**
@@ -118,7 +118,7 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
         return (s) => {
             const bar = progressBar(stats.bytesFromCache, stats.bytesProcessed, stats.bytesTotal);
             const folder = item.path.length === 0 ? ['Pictures'] : item.path;
-            progress([`[${bar}]`, folder.join('/'), s || '']);
+            progress([`[${bar}]`, folder.join('/'), s || ' ']);
         };
     }
     while (true) {
@@ -163,7 +163,7 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
             }
             item.data.immediateChildCount = item.data.geoItems.length;
             if (item.data.immediateChildCount === 0)
-                item.data.folders.push(item.path.join('/'));
+                item.data.folders.push(item.path.join('/').toLowerCase());
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
                 await resolveThumbnails(log(item), item);
@@ -246,6 +246,13 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
     }
 }
 /**
+ * Given a longitude, normalizes it to the range [-180, 180).
+ * Used for instance if you want to calculate "lng1 + width" which might cross the antimeridian.
+ */
+function lngWrap(lng) {
+    return (lng + 180 + 360) % 360 - 180;
+}
+/**
  * This function takes a map viewport, represented by (1) its lat/lng bounds, (2) its pixel dimensions.
  * It splits this into "clusters" (tiles), each cluster being an approximately 60x60 square of pixels (give or take;
  * if the pixelWidth/Height don't neatly divide into 60 then we'll use however many clusters best fit).
@@ -260,7 +267,7 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
     const TILE_SIZE_PX = 60;
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
-    const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: (Math.floor(sw.lng / tileSize) * tileSize + 360 + 180) % 360 - 180 };
+    const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: lngWrap((Math.floor(sw.lng / tileSize) * tileSize)) };
     const numTilesX = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
     const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
     const tiles = [];
@@ -270,27 +277,32 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
                 someItems: [],
                 totalItems: 0,
                 bounds: {
-                    sw: { lat: swSnap.lat + y * tileSize, lng: swSnap.lng + x * tileSize },
-                    ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: swSnap.lng + (x + 1) * tileSize }
-                }
+                    sw: { lat: swSnap.lat + y * tileSize, lng: lngWrap(swSnap.lng + x * tileSize) },
+                    ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: lngWrap(swSnap.lng + (x + 1) * tileSize) }
+                },
+                center: { lat: swSnap.lat + (y + 0.5) * tileSize, lng: lngWrap(swSnap.lng + (x + 0.5) * tileSize) }
             });
         }
     }
     const dateCounts = new Map();
+    // CARE! Following loop is hot; goal is 50,000 items in 5ms, but we're currently at 10ms
     for (const item of items) {
+        let tally = dateCounts.get(item.date); // TODO: this lookup costs 2ms
+        if (!tally) {
+            tally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
+            dateCounts.set(item.date, tally);
+        }
         const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
         const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
-        if (x < 0 || x >= numTilesX || y < 0 || y >= numTilesY)
-            continue;
-        dateCounts.set(item.date, (dateCounts.get(item.date) || 0) + 1);
-        // dateCounts includes all items, but tiles only includes those that match the filter
-        if (filter.dateRange && (item.date < filter.dateRange.start || item.date >= filter.dateRange.end))
-            continue;
-        if (filter.text && !item.name.toLowerCase().includes(filter.text.toLowerCase()))
+        const inBounds = (x >= 0 && x < numTilesX && y >= 0 && y < numTilesY);
+        const inFilter = filter.text !== undefined && (item.name.includes(filter.text) || item.tags.some(tag => tag.includes(filter.text)));
+        const inDateRange = filter.dateRange === undefined || (item.date >= filter.dateRange.start && item.date < filter.dateRange.end);
+        tally[inBounds ? 'inBounds' : 'outBounds'][inFilter ? 'inFilter' : 'outFilter']++;
+        if ((filter.text && !inFilter) || !inBounds || !inDateRange)
             continue;
         const tile = tiles[y * numTilesX + x];
         if (tile.someItems.length < MAX_ITEMS_PER_TILE)
-            tile.someItems.push(item);
+            tile.someItems.push(item); // TODO: this push costs 1ms
         tile.totalItems++;
     }
     return [tiles.filter(t => t.someItems.length > 0), { dateCounts }];

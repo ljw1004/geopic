@@ -1,28 +1,76 @@
 // Tests+prototypes go here!
 // WE WILL LEAVE THIS FILE IN PLACE. IT SHOULD NOT BE REMOVED.
 
-import { Numdate, Tally } from "./geoitem";
+import { Numdate, OneDayTally, Tally } from "./geoitem";
 
 export { }
+
+type InclusiveDateRange = { start: Numdate, end: Numdate };
+
+type HistogramBarInfo = {
+    granularity: 'days' | 'months';
+    bounds: InclusiveDateRange; // in months view, this is from the 1st of the first bar to the 31st of the last bar
+    count: number; // number of bars in the histogram
+    left: (date: Numdate) => number;  // pixel coordinate of the left edge of the bar encompassing this date
+    width: number;  // pixel width of each bar    
+}
 
 /**
  * Converts a number in YYYYMMDD format to a Date object.
  */
 function numToDate(yyyymmdd: number): Date {
     const year = Math.floor(yyyymmdd / 10000);
-    const month = Math.floor((yyyymmdd % 10000) / 100) - 1; // Month is 0-indexed in Date
+    const month = Math.floor((yyyymmdd % 10000) / 100) - 1; // Month is 1-indexed in YYYYMMDD, but 0-indexed in Date
     const day = yyyymmdd % 100;
     return new Date(Date.UTC(year, month, day));
 }
 
 /**
- * Calculates the number of days between two dates in YYYYMMDD format (exclusive).
+ * Converts Date object to a number in YYYYMMDD format
  */
-function dayInterval(date0: number, date: number): number {
-    return (numToDate(date).getTime() - numToDate(date0).getTime()) / (1000 * 60 * 60 * 24);
+function dateToNum(date: Date): Numdate {
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1; // Month is 0-indexed in Date, but 1-indexed in YYYYMMDD
+    const day = date.getUTCDate();
+    return year * 10000 + month * 100 + day;
 }
 
-type InclusiveDateRange = { start: Numdate, end: Numdate };
+/**
+ * Calculates the number of days between two (inclusive) dates in YYYYMMDD format
+ */
+function dayInterval(range: InclusiveDateRange): number {
+    return (numToDate(range.end).getTime() - numToDate(range.start).getTime()) / (1000 * 60 * 60 * 24) + 1;
+}
+
+/*
+ * Calculates the number of months between two (inclusive) dates in YYYYMMDD format. e.g.
+ * monthInterval(2025-01-01, 2025-01-15) === 1  // because it's inclusive, and both are 2025-01
+ * monthInterval(2025-01-31, 2025-02-01) === 2
+ */
+function monthInterval(range: InclusiveDateRange): number {
+    const [startYear, startMonth] = [Math.floor(range.start / 10000), Math.floor((range.start / 100) % 100)];
+    const [endYear, endMonth] = [Math.floor(range.end / 10000), Math.floor((range.end / 100) % 100)];
+    return (endYear - startYear) * 12 + (endMonth - startMonth) + 1;
+}
+
+/**
+ * If the range doesn't cover at least minimum days, expands it.
+ * We'll expand the range centered, shifting end date forwards one day at a time
+ * and start date backwards, until the range covers at least minimum days.
+ */
+function expandToMinimum(range: InclusiveDateRange, minimum: number): InclusiveDateRange {
+    function diff(start: Date, end: Date): number {
+        return (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
+    }
+    const [start, end] = [numToDate(range.start), numToDate(range.end)];
+    while (true) {
+        if (diff(start, end) + 1 >= minimum) break;
+        start.setDate(start.getDate() - 1);
+        if (diff(start, end) + 1 >= minimum) break;
+        end.setDate(end.getDate() + 1);
+    }
+    return { start: dateToNum(start), end: dateToNum(end) };
+}
 
 /**
  * HISTOGRAM TODO: DESIGN IDEAS
@@ -276,7 +324,6 @@ export class Histogram {
 
         // Logical state
         this.tally = undefined;
-        this.usesFilter = false;
         this.currentDrag = undefined;
         this.bounds = { start: 0, end: 0 };
         this.selection = undefined;
@@ -302,28 +349,26 @@ export class Histogram {
             this.tally = tally;
 
             // Compute maximums and minimums
-            let range: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
-            let bounds: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
+            let fullRange: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
+            let inBounds: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
             for (const [date, counts] of tally.dateCounts) {
-                range.start = Math.min(range.start, date);
-                range.end = Math.max(range.end, date);
+                fullRange.start = Math.min(fullRange.start, date);
+                fullRange.end = Math.max(fullRange.end, date);
                 if (counts.inBounds.inFilter === 0 && counts.inBounds.outFilter === 0) continue;
-                bounds.start = Math.min(bounds.start, date);
-                bounds.end = Math.max(bounds.end, date);
+                inBounds.start = Math.min(inBounds.start, date);
+                inBounds.end = Math.max(inBounds.end, date);
             }
-            if (bounds.end === 0) bounds = { start: range.start, end: range.end }; // If no inBounds data, use full range
+            if (inBounds.end === 0) inBounds = { start: fullRange.start, end: fullRange.end }; // If no inBounds data, use full range
 
-            // If tally's range agrees with checksum, then we can leave selection and bounds as they are. Otherwise...
-            if (this.checksum.start !== range.start || this.checksum.end !== range.end) {
-                // Should we erase the selection?
-                if (range.start !== this.checksum.start || range.end < this.checksum.end) this.selection = undefined;
-                // Should we update bounds?
-                if (this.selection && range.end > this.checksum.end) this.bounds.end = range.end;
-                else if (!this.selection) this.bounds = bounds; // TODO: minimum 7 days
-                // Final steps
-                this.checksum = range;
-                this.saveState();
-            }
+            // Has a change in fullRange invalidated the selection?
+            if (fullRange.start !== this.checksum.start || fullRange.end < this.checksum.end) this.selection = undefined;
+            // Should we extend the bounds?
+            if (this.selection && fullRange.end > this.checksum.end) this.bounds.end = fullRange.end;
+            // Should we entirely reset the bounds?
+            if (!this.selection) this.bounds = expandToMinimum(inBounds, 7);
+
+            this.checksum = fullRange;
+            this.saveState();
         }
 
         this.recomputeDOM();
@@ -379,43 +424,92 @@ export class Histogram {
             return;
         }
 
-        // For now, we'll only implement day-view
-        // TODO: implement month view when totalDays > 100
+        const barBounds = this.recomputeDOM_bars(this.tally.dateCounts);
+        this.recomputeDOM_selectionOverlay();
+        this.recomputeDOM_timeLabels(barBounds);
+    }
 
+    private recomputeDOM_bars(dateCounts: Map<Numdate, OneDayTally>): HistogramBarInfo {
         const [chartWidth, chartHeight] = [this.chartArea.offsetWidth, this.chartArea.offsetHeight];
-        const daySpan = dayInterval(this.bounds.start, this.bounds.end);
+        const dayCount = dayInterval(this.bounds);
+        const granularity = dayCount <= 100 ? 'days' : 'months';
 
-        let maxCount = 0; // If there are no bars in range, this will be 0, but we'll avoid division by zero because no bars!
-        for (const [date, counts] of this.tally.dateCounts) {
-            if (date < this.bounds.start || date > this.bounds.end) continue;
-            const totalCount = counts.inBounds.inFilter + counts.inBounds.outFilter +
-                counts.outBounds.inFilter + counts.outBounds.outFilter;
-            maxCount = Math.max(maxCount, totalCount);
+        let bi: HistogramBarInfo;
+        let barCounts: Map<Numdate, OneDayTally>; // it's called "OneDayTally" but it's really the OneBarTally...
+        if (granularity === 'days') {
+            bi = {
+                granularity,
+                bounds: { ...this.bounds },
+                count: dayCount,
+                left: (date) => ((dayInterval({ start: this.bounds.start, end: date }) - 1) / dayCount) * chartWidth,
+                width: chartWidth / dayCount,
+            }
+            barCounts = dateCounts;
+        } else {
+            // In months view, we'll still have a dateCounts map keyed off Numdate,
+            // but the difference is we'll only have entries for the first of each month.
+            // The chart will show columns for the entirity of each month,
+            // e.g. if this.bounds is Jan15 to Mar15, we'll plot bars Jan, Feb, Mar, and each of those
+            // bars will accumulate photos for every day in that month.
+            const bounds = {
+                start: Math.floor(this.bounds.start / 100) * 100 + 1,
+                end: Math.floor(this.bounds.end / 100) * 100 + 31, // this over-approximation is safe because we only use it for bounds checking
+            };
+            const barCount = monthInterval(bounds);
+            bi = {
+                granularity,
+                bounds,
+                count: barCount,
+                left: (date) => ((monthInterval({ start: bounds.start, end: date }) - 1) / barCount) * chartWidth,
+                width: chartWidth / barCount,
+            }
+            // Now compute barCounts as aggregates from dateCounts:
+            barCounts = new Map();
+            for (const [date, counts] of dateCounts) {
+                const firstOfMonth = Math.floor(date / 100) * 100 + 1;
+                if (firstOfMonth < bounds.start || firstOfMonth > bounds.end) continue;
+                let monthTally = barCounts.get(firstOfMonth);
+                if (!monthTally) {
+                    monthTally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
+                    barCounts.set(firstOfMonth, monthTally);
+                }
+                monthTally.inBounds.inFilter += counts.inBounds.inFilter;
+                monthTally.inBounds.outFilter += counts.inBounds.outFilter;
+                monthTally.outBounds.inFilter += counts.outBounds.inFilter;
+                monthTally.outBounds.outFilter += counts.outBounds.outFilter;
+            }
         }
 
-        for (const [date, counts] of this.tally.dateCounts) {
-            if (date < this.bounds.start || date > this.bounds.end) continue;
-            const daysFromStart = dayInterval(this.bounds.start, date);
-            const x = (daysFromStart / daySpan) * chartWidth;
-            const barWidth = chartWidth / daySpan
-            // Render the bar. Blue/yellow/grey are disjoint.
+        // Calculation of maximums is the same for months as for days
+        let maxInBoundsCount = 1; // cheap trick to avoid division-by-zero in pathological case where counts[date] === 0
+        for (const [date, counts] of barCounts) {
+            if (date < bi.bounds.start || date > bi.bounds.end) continue;
+            maxInBoundsCount = Math.max(counts.inBounds.inFilter + counts.inBounds.outFilter, maxInBoundsCount);
+        }
+
+        // Render the bar. Blue/yellow/grey are disjoint.
+        for (const [date, counts] of barCounts) {
+            if (date < bi.bounds.start || date > bi.bounds.end) continue;
             const colorCounts = { blue: counts.inBounds.outFilter, yellow: counts.inBounds.inFilter + counts.outBounds.inFilter, grey: counts.outBounds.outFilter };
+            let bottom = 0;
             for (const color of (['blue', 'yellow', 'grey'] as const)) {
                 if (colorCounts[color] === 0) continue;
                 const bar = this.getBarFromPool();
+                const height = (colorCounts[color] / maxInBoundsCount) * chartHeight;
                 bar.className = `histogram-bar histogram-bar-${color}`;
-                bar.style.left = `${x}px`;
-                bar.style.bottom = '0px';
-                bar.style.width = `${barWidth}px`;
-                bar.style.height = `${(colorCounts[color] / maxCount) * chartHeight}px`;
+                bar.style.left = `${bi.left(date)}px`;
+                bar.style.bottom = `${bottom}px`;
+                bar.style.width = `${bi.width}px`;
+                bar.style.height = `${height}px`;
                 bar.style.display = 'block';
+                bottom += height;
             }
         }
-        this.updateSelectionOverlay();
-        this.updateTimeLabels();
+
+        return bi;
     }
 
-    private updateSelectionOverlay(): void {
+    private recomputeDOM_selectionOverlay(): void {
         if (!this.selection) {
             this.selectionOverlay.style.display = 'none';
             return;
@@ -429,13 +523,101 @@ export class Histogram {
         // - ensure edges are draggable even if clipped
     }
 
-    private updateTimeLabels(): void {
+    private recomputeDOM_timeLabels(bi: HistogramBarInfo): void {
         if (!this.tally) return;
 
-        // TODO: implement label logic
-        // - determine appropriate label granularity (years/months/days)
-        // - position labels at left/center/right
-        // - ensure labels are meaningful for current zoom level
+        // Our goal is to show a few labels at "natural" marker points, years or months or days,
+        // depending on the range of the data. We'll first try year-markers to see if there
+        // are enough to populate the labels, or if the range is so small that it only shows
+        // a single year hence year-markers are no good. In that case we'll try the same with
+        // month-markers, then day-markers. Day-markers will necessarily work because of our
+        // invariant that the bounds are at least 7 days.
+
+        // For our three potential strategies (years, months, days), the following generators
+        // produce an infinite sequence of markers starting at or slightly before bi.bounds.start.
+        // The "slightly before" is to make this code simpler; it's later cleaned up by filterBounds.
+        function* years(): Iterable<Numdate> {
+            const startYear = Math.floor(bi.bounds.start / 10000);
+            for (let year = startYear; ; year++) yield year * 10000 + 101; // January 1st of each year
+        }
+        function* months(): Iterable<Numdate> {
+            const startYear = Math.floor(bi.bounds.start / 10000);
+            for (let year = startYear, month = 1; ;) {
+                yield year * 10000 + month * 100 + 1; // 1st of each month
+                month += 1; if (month > 12) { year += 1; month = 1; }
+            }
+        }
+        function* days(): Iterable<Numdate> {
+            for (let date = numToDate(bi.bounds.start); ; date.setUTCDate(date.getUTCDate() + 1)) {
+                yield dateToNum(date);
+            }
+        }
+
+        // We'll use this "filterBounds" generator to (1) filter out early dates which were there
+        // because the above functions are fuzzy, (2) stop the iterable after the end because
+        // the above functions are infinite. We operate on pixels, not dates, so it's easy to
+        // calculate "only include dates within 90% of the pixel width of the chart" (so that
+        // labels don't get clipped at start or end).)
+        function* filterBounds(dates: Iterable<Numdate>): Iterable<Numdate> {
+            for (const date of dates) {
+                const [center, chartWidth] = [bi.left(date) + bi.width / 2, bi.count * bi.width];
+                const msg = `${date}:${center.toFixed(1)}, chartWidth=${chartWidth}`;
+                if (center < chartWidth * 0.05) { console.log(`${msg} too early`); continue; }
+                else if (center > chartWidth * 0.95) { console.log(`${msg} too late`); break; }
+                else { console.log(`${msg} just right`); yield date; }
+            }
+        }
+
+        // Each of the three strategies (years, months, days) has its own way of formatting too:
+        // years just as "2011, 2012, 2013", months as "Jan, Feb 2011, Mar", days as
+        // "1 Jan, 2 Jan 2011, 3 Jan". Note that one label is more detailed than the others
+        function yearFmt(date: Numdate, _detailed: boolean): string {
+            return `${Math.floor(date / 10000)}`;
+        }
+        function monthFmt(date: Numdate, detailed: boolean): string {
+            const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[Math.floor((date / 100) % 100)];
+            return detailed ? `${month} ${yearFmt(date, true)}` : `${month}`;
+        }
+        function dayFmt(date: Numdate, detailed: boolean): string {
+            const day = date % 100;
+            return detailed ? `${day} ${monthFmt(date, true)}` : `${day} ${monthFmt(date, false)}`;
+        }
+
+        // Now we can declaratively write the three strategies:
+        const strategies = [
+            { dates: years(), fmt: yearFmt },
+            { dates: months(), fmt: monthFmt },
+            { dates: days(), fmt: dayFmt }
+        ];
+
+        // And there's a simple uniform way to pick the beset strategy!
+        // We'll produce an array 'dates' which has three elements,
+        // either three dates (if we want all three labels) or two dates
+        // and the middle undefined (if we only want two labels).
+        let dates: [Numdate, Numdate | undefined, Numdate] = [0, undefined, 0];
+        let fmt = yearFmt;
+        for (const strategy of strategies) {
+            const dd = Array.from(filterBounds(strategy.dates));
+            fmt = strategy.fmt;
+            if (dd.length <= 1) continue;
+            else if (dd.length === 2) dates = [dd[0], undefined, dd[1]];
+            else if (dd.length === 3) dates = [dd[0], dd[1], dd[2]];
+            else if (dd.length === 4) dates = [dd[0], dd[1], dd[2]];
+            else dates = [dd[0], dd[Math.floor((dd.length - 1) / 2)], dd[dd.length - 1]];
+            break;
+        }
+        console.log(`${dates[0]}:${bi.left(dates[0]).toFixed(1)} ${dates[1] ? `${dates[1]}:${bi.left(dates[1]).toFixed(1)}` : '_'} ${dates[2]}:${bi.left(dates[2]).toFixed(1)}`);
+
+        // That's enough to position and format the labels.
+        const labels = [this.labelLeft, this.labelCenter, this.labelRight];
+        for (let i = 0; i < 3; i++) {
+            const [date, label] = [dates[i], labels[i]];
+            label.style.display = date ? 'block' : 'none';
+            if (!date) continue;
+            label.textContent = fmt(date, i === (dates[1] ? 1 : 0));
+            label.style.left = `${bi.left(date)}px`;
+        }
     }
 
     /**

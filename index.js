@@ -96,13 +96,16 @@ export async function onBodyLoad() {
     else if (accessToken) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">⏏</span>';
     }
+    else if (localCache) {
+        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
+    }
     else {
         instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
     }
     instruct(instructions);
 }
 function instruct(instructions) {
-    // instructions += '<br/><span id="clear">Clear cache...</span>';
+    instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
@@ -138,7 +141,7 @@ function renderGeo(geoItems) {
     const filter = { dateRange: undefined, text: undefined };
     const [clusters, summary] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoItems, filter);
     clusters.sort((a, b) => b.totalItems - a.totalItems);
-    testHistogram(summary.dateCounts);
+    testHistogram(summary);
     for (const cluster of clusters) {
         const item = cluster.someItems[0];
         const content = document.createElement('div');

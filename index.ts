@@ -80,7 +80,7 @@ export async function onBodyLoad(): Promise<void> {
     if (accessToken) {
         document.getElementById('instructions')!.innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
         const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
-        try { if (r.ok) photosDriveItem = await r.json(); } catch {}
+        try { if (r.ok) photosDriveItem = await r.json(); } catch { }
     }
 
     if (!photosDriveItem) {
@@ -98,6 +98,8 @@ export async function onBodyLoad(): Promise<void> {
         instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">⏏</span>';
     } else if (accessToken) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">⏏</span>';
+    } else if (localCache) {
+        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
     } else {
         instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
     }
@@ -105,7 +107,7 @@ export async function onBodyLoad(): Promise<void> {
 }
 
 function instruct(instructions: string): void {
-    // instructions += '<br/><span id="clear">Clear cache...</span>';
+    instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions')!.innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
@@ -140,12 +142,12 @@ function renderGeo(geoItems: GeoItem[]): void {
     MARKERS = [];
 
     const bounds = MAP.getBounds()!;
-    const sw = {lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng()};
-    const ne = {lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng()};
+    const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
+    const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const filter = { dateRange: undefined, text: undefined };
     const [clusters, summary] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoItems, filter);
-    clusters.sort((a,b) => b.totalItems - a.totalItems)
-    testHistogram(summary.dateCounts);
+    clusters.sort((a, b) => b.totalItems - a.totalItems)
+    testHistogram(summary);
 
     for (const cluster of clusters) {
         const item = cluster.someItems[0];
@@ -173,7 +175,7 @@ function renderGeo(geoItems: GeoItem[]): void {
         badge.style.borderRadius = '12px';
         badge.style.border = '1px solid white';
         content.appendChild(badge);
-        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({map: MAP, content, position: item.position, zIndex: cluster.totalItems});
+        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalItems });
         marker.addListener('click', () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
         MARKERS.push(marker);
     }
@@ -181,8 +183,8 @@ function renderGeo(geoItems: GeoItem[]): void {
     const thumbnailsDiv = document.getElementById('thumbnails-grid')!;
     thumbnailsDiv.innerHTML = '';
 
-    
-    for (const item of clusters.flatMap(c => c.someItems).slice(0,40)) {
+
+    for (const item of clusters.flatMap(c => c.someItems).slice(0, 40)) {
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
         img.loading = 'lazy';
@@ -196,7 +198,7 @@ function renderGeo(geoItems: GeoItem[]): void {
         });
         thumbnailsDiv.appendChild(img);
     }
-    
+
 }
 
 /**
@@ -216,12 +218,12 @@ export async function onGenerateClick(): Promise<void> {
     }
 
     const geoItems: GeoItem[] = [];
-    
-    function progress(update: string[] | GeoItem[]): void {        
+
+    function progress(update: string[] | GeoItem[]): void {
         if (update.length === 0) return;
         if (typeof update[0] === 'string') {
             document.getElementById('progress')!.textContent = [`${geoItems.length} photos so far`, ...update].join('\n');
-        }  else {
+        } else {
             geoItems.push(...update as GeoItem[]);
             renderGeo(geoItems);
         }
