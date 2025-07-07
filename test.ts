@@ -8,11 +8,13 @@ export { }
 type InclusiveDateRange = { start: Numdate, end: Numdate };
 
 type HistogramBarInfo = {
-    granularity: 'days' | 'months';
+    granularity: 'days' | 'weeks' | 'months';
     bounds: InclusiveDateRange; // in months view, this is from the 1st of the first bar to the 31st of the last bar
-    count: number; // number of bars in the histogram
     left: (date: Numdate) => number;  // pixel coordinate of the left edge of the bar encompassing this date
     width: number;  // pixel width of each bar    
+    find: (bar: number) => Numdate; // finds the sentinel date for the bar, numbered 0 <= bar < count
+    count: number; // number of bars in the histogram
+    snap: (date: Numdate) => Numdate; // snaps a date to the sentinel date for its bar
 }
 
 /**
@@ -58,15 +60,16 @@ function monthInterval(range: InclusiveDateRange): number {
  * We'll expand the range centered, shifting end date forwards one day at a time
  * and start date backwards, until the range covers at least minimum days.
  */
-function expandToMinimum(range: InclusiveDateRange, minimum: number): InclusiveDateRange {
+function expandToMinimum(range: InclusiveDateRange): InclusiveDateRange {
+    const minimumDays = 7;
     function diff(start: Date, end: Date): number {
         return (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     }
     const [start, end] = [numToDate(range.start), numToDate(range.end)];
     while (true) {
-        if (diff(start, end) + 1 >= minimum) break;
+        if (diff(start, end) + 1 >= minimumDays) break;
         start.setDate(start.getDate() - 1);
-        if (diff(start, end) + 1 >= minimum) break;
+        if (diff(start, end) + 1 >= minimumDays) break;
         end.setDate(end.getDate() + 1);
     }
     return { start: dateToNum(start), end: dateToNum(end) };
@@ -154,7 +157,7 @@ function expandToMinimum(range: InclusiveDateRange, minimum: number): InclusiveD
  * State
  * - selection: {start: Numdate, end: Numdate} | undefined  // the date-range the user has selected
  * - bounds: {start: Numdate, end: Numdate}   // the date-range currently visible
- * - checksum: {start: Numdate, end: Numdate}  // a checksum for whether bounds and selection are valid
+ * - fullRange: {start: Numdate, end: Numdate}  // the full date-range of the data
  * - All three are private. They're persisted to localStorage, and read by the component upon construction.
  *   (The only way for callers to learn about the selection is on the onSelectionChange event).
  * - data: Tally | undefined
@@ -169,11 +172,11 @@ function expandToMinimum(range: InclusiveDateRange, minimum: number): InclusiveD
  *   when the drag is released. When the user updates the selection by dragging an edge of an
  *   existing selection, this event is fired during the drag (and hence not on release).
  * - setData(data: Tally): void
- *   If tally's range differs from checksum then we might update 'bounds' and 'selection' (the precise
+ *   If tally's range differs from fullRange then we might update 'bounds' and 'selection' (the precise
  *   logic is subtle and not worth documenting; it satisfies the goal of remembering the user's selection
  *   if possible even in the common case that new photos are added past the end date, but also updating bounds
  *   to reflect the new end date.)
- *   It updates the 'checksum'. And if selection is undefined, it also updates 'bounds' appropriately.
+ *   It updates the 'fullRange'. And if selection is undefined, it also updates 'bounds' appropriately.
  *   Updates the 'data' state. Recomputes all DOM elements as needed.
  *   If the tally contained no datapoints, then we set tally to 'undefined'.
  * 
@@ -267,7 +270,7 @@ function expandToMinimum(range: InclusiveDateRange, minimum: number): InclusiveD
 export class Histogram {
     private bounds: InclusiveDateRange; // invariant: minimum 7 days
     private selection: InclusiveDateRange | undefined;
-    private checksum: InclusiveDateRange;
+    private fullRange: InclusiveDateRange;
     private tally: Tally | undefined;
     private currentDrag: undefined | {}; // TODO: define proper type for drag state
 
@@ -327,14 +330,14 @@ export class Histogram {
         this.currentDrag = undefined;
         this.bounds = { start: 0, end: 0 };
         this.selection = undefined;
-        this.checksum = { start: 0, end: 0 };
+        this.fullRange = { start: 0, end: 0 };
         // Try to fetch from last time
         const savedStateRaw = localStorage.getItem('histogram-state');
         if (savedStateRaw) {
             const savedState = JSON.parse(savedStateRaw);
             this.bounds = savedState.bounds || { start: 20250101, end: 20251231 };
             this.selection = savedState.selection || undefined;
-            this.checksum = savedState.checksum || { start: 0, end: 0 };
+            this.fullRange = savedState.fullRange || { start: 0, end: 0 };
         }
     }
 
@@ -361,22 +364,46 @@ export class Histogram {
             if (inBounds.end === 0) inBounds = { start: fullRange.start, end: fullRange.end }; // If no inBounds data, use full range
 
             // Has a change in fullRange invalidated the selection?
-            if (fullRange.start !== this.checksum.start || fullRange.end < this.checksum.end) this.selection = undefined;
+            if (fullRange.start !== this.fullRange.start || fullRange.end < this.fullRange.end) this.selection = undefined;
             // Should we extend the bounds?
-            if (this.selection && fullRange.end > this.checksum.end) this.bounds.end = fullRange.end;
+            if (this.selection && fullRange.end > this.fullRange.end) this.bounds.end = fullRange.end;
             // Should we entirely reset the bounds?
-            if (!this.selection) this.bounds = expandToMinimum(inBounds, 7);
+            if (!this.selection) this.bounds = expandToMinimum(inBounds);
 
-            this.checksum = fullRange;
+            this.fullRange = fullRange;
             this.saveState();
         }
 
         this.recomputeDOM();
     }
 
-
     private handleMouseWheel(event: WheelEvent): void {
-        // TODO: implement!
+        event.preventDefault(); // Prevent default scrolling behavior
+        if (!this.tally) return; // No zoom if no data
+        const rect = this.chartArea.getBoundingClientRect();
+        const cursorX = event.clientX - rect.left; // relative to chart area
+        if (cursorX < 0 || cursorX > rect.width) return; // scroll out of bounds
+
+        // Calculates new bounds based on zoom factor, keeping the date under the cursor at the same pixel position.
+        // We'll do our calculation in milliseconds for easier maths.
+        const [startMs, endMs] = [numToDate(this.bounds.start).getTime(), numToDate(this.bounds.end).getTime()];
+        const cursorFraction = cursorX / rect.width;
+        const cursorMs = startMs + cursorFraction * (endMs - startMs);
+        const zoomFactor = Math.exp(-event.deltaY * 0.001); // deltaY is negative when scrolling up (zoom in), positive down (zoom out)
+        const newSpanMs = (endMs - startMs) / zoomFactor;
+        const [newStartMs, newEndMs] = [cursorMs - cursorFraction * newSpanMs, cursorMs + (1 - cursorFraction) * newSpanMs];
+        const newBounds = { start: dateToNum(new Date(newStartMs)), end: dateToNum(new Date(newEndMs)) };
+
+        // Constrain those bounds to stay within limits: not too zoomed-out, not too zoomed-in
+        const constrainedBounds = expandToMinimum({
+            start: Math.max(this.fullRange.start, newBounds.start),
+            end: Math.min(this.fullRange.end, newBounds.end)
+        });
+
+        // Update
+        this.bounds = constrainedBounds;
+        this.saveState();
+        this.recomputeDOM();
     }
 
     private handleMouseDown(event: MouseEvent): void {
@@ -429,10 +456,18 @@ export class Histogram {
         this.recomputeDOM_timeLabels(barBounds);
     }
 
+    /**
+     * This function recomputes DOM elements.
+     * It also returns a very useful 'bi: HistogramBarInfo' object that describes the bars.
+     * To note: this.bounds represents a notional exact range of the histogram, but
+     * bi.bounds represents the ranges of the bars which in weeks/months view may be slightly larger
+     * than this.bounds (because they're enlarged to the nearest bar boundaries).
+     */
     private recomputeDOM_bars(dateCounts: Map<Numdate, OneDayTally>): HistogramBarInfo {
         const [chartWidth, chartHeight] = [this.chartArea.offsetWidth, this.chartArea.offsetHeight];
         const dayCount = dayInterval(this.bounds);
-        const granularity = dayCount <= 100 ? 'days' : 'months';
+        const granularity = dayCount <= 140 ? 'days' : dayCount < 980 ? 'weeks' : 'months'; // at most 140 bars in days/weeks view
+        console.log(`Recomputing bars: granularity=${granularity}, dayCount=${dayCount}, bounds=${JSON.stringify(this.bounds)}`);
 
         let bi: HistogramBarInfo;
         let barCounts: Map<Numdate, OneDayTally>; // it's called "OneDayTally" but it's really the OneBarTally...
@@ -440,43 +475,75 @@ export class Histogram {
             bi = {
                 granularity,
                 bounds: { ...this.bounds },
-                count: dayCount,
                 left: (date) => ((dayInterval({ start: this.bounds.start, end: date }) - 1) / dayCount) * chartWidth,
                 width: chartWidth / dayCount,
+                find: (bar) => dateToNum(new Date(numToDate(this.bounds.start).setDate(numToDate(this.bounds.start).getDate() + bar))),
+                count: dayCount,
+                snap: (date) => date,
             }
             barCounts = dateCounts;
         } else {
-            // In months view, we'll still have a dateCounts map keyed off Numdate,
-            // but the difference is we'll only have entries for the first of each month.
-            // The chart will show columns for the entirity of each month,
-            // e.g. if this.bounds is Jan15 to Mar15, we'll plot bars Jan, Feb, Mar, and each of those
-            // bars will accumulate photos for every day in that month.
-            const bounds = {
-                start: Math.floor(this.bounds.start / 100) * 100 + 1,
-                end: Math.floor(this.bounds.end / 100) * 100 + 31, // this over-approximation is safe because we only use it for bounds checking
-            };
-            const barCount = monthInterval(bounds);
-            bi = {
-                granularity,
-                bounds,
-                count: barCount,
-                left: (date) => ((monthInterval({ start: bounds.start, end: date }) - 1) / barCount) * chartWidth,
-                width: chartWidth / barCount,
+            // In aggregate views, the keys of 'barCounts' are still Numdates, but they represent the date of the start of the bar.
+            // The "viewport for aggregation" in generally will be larger than this.bounds,
+            // so that the first and last bars don't get short-changed.
+            let bounds: InclusiveDateRange;
+            let barCount: number;
+            if (granularity === 'weeks') {
+                // We'll snap to a grid of weeks aligning on zero timestamp (Jan 1st 1970) as the origin of the grid.
+                // This way we'll plot consistent weeks no matter how the user zooms/pans.
+                const SEVEN_DAYS_IN_MS = 1000 * 60 * 60 * 24 * 7;
+                const [startMs, endMs] = [numToDate(this.bounds.start).getTime(), numToDate(this.bounds.end).getTime()];
+                const startSnap = new Date(Math.floor(startMs / SEVEN_DAYS_IN_MS) * SEVEN_DAYS_IN_MS); // first day of first week
+                const endSnap = new Date(Math.ceil(endMs / SEVEN_DAYS_IN_MS) * SEVEN_DAYS_IN_MS);
+                endSnap.setDate(endSnap.getDate() + 6); // final day of final week
+                bounds = { start: dateToNum(startSnap), end: dateToNum(endSnap) };
+                barCount = dayInterval(bounds) / 7;
+                bi = {
+                    granularity,
+                    bounds: { ...this.bounds },
+                    left: (date) => (dayInterval({ start: bounds.start, end: date }) - 1) / 7 / barCount * chartWidth,
+                    width: chartWidth / barCount,
+                    find: (bar) => dateToNum(new Date(numToDate(bounds.start).setDate(numToDate(bounds.start).getDate() + bar * 7))),
+                    count: barCount,
+                    snap: (date) => {
+                        const d = numToDate(bounds.start);
+                        d.setDate(d.getDate() + Math.floor((dayInterval({ start: bounds.start, end: date }) - 1) / 7) * 7);
+                        return dateToNum(d);
+                    },
+                }
+            } else {
+                bounds = {
+                    start: Math.floor(this.bounds.start / 100) * 100 + 1,
+                    end: Math.floor(this.bounds.end / 100) * 100 + 31, // this over-approximation is safe because we only use it for bounds checking
+                };
+                barCount = monthInterval(bounds);
+                bi = {
+                    granularity,
+                    bounds,
+                    left: (date) => ((monthInterval({ start: bounds.start, end: date }) - 1) / barCount) * chartWidth,
+                    width: chartWidth / barCount,
+                    find: (bar) => {
+                        const month = Math.floor((bounds.start / 100) % 100) - 1 + bar; // 0-based, might be >12 (but we'll modulo it next)
+                        return (bounds.start / 10000 + Math.floor(month / 12)) * 10000 + (month % 12 + 1) * 100 + 1; // 1st of the month
+                    },
+                    count: barCount,
+                    snap: (date: Numdate) => Math.floor(date / 100) * 100 + 1,
+                }
             }
             // Now compute barCounts as aggregates from dateCounts:
             barCounts = new Map();
             for (const [date, counts] of dateCounts) {
-                const firstOfMonth = Math.floor(date / 100) * 100 + 1;
-                if (firstOfMonth < bounds.start || firstOfMonth > bounds.end) continue;
-                let monthTally = barCounts.get(firstOfMonth);
-                if (!monthTally) {
-                    monthTally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
-                    barCounts.set(firstOfMonth, monthTally);
+                if (date < bounds.start || date > bounds.end) continue;
+                const barDate = bi.snap(date);
+                let barTally = barCounts.get(barDate);
+                if (!barTally) {
+                    barTally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
+                    barCounts.set(barDate, barTally);
                 }
-                monthTally.inBounds.inFilter += counts.inBounds.inFilter;
-                monthTally.inBounds.outFilter += counts.inBounds.outFilter;
-                monthTally.outBounds.inFilter += counts.outBounds.inFilter;
-                monthTally.outBounds.outFilter += counts.outBounds.outFilter;
+                barTally.inBounds.inFilter += counts.inBounds.inFilter;
+                barTally.inBounds.outFilter += counts.inBounds.outFilter;
+                barTally.outBounds.inFilter += counts.outBounds.inFilter;
+                barTally.outBounds.outFilter += counts.outBounds.outFilter;
             }
         }
 
@@ -561,10 +628,9 @@ export class Histogram {
         function* filterBounds(dates: Iterable<Numdate>): Iterable<Numdate> {
             for (const date of dates) {
                 const [center, chartWidth] = [bi.left(date) + bi.width / 2, bi.count * bi.width];
-                const msg = `${date}:${center.toFixed(1)}, chartWidth=${chartWidth}`;
-                if (center < chartWidth * 0.05) { console.log(`${msg} too early`); continue; }
-                else if (center > chartWidth * 0.95) { console.log(`${msg} too late`); break; }
-                else { console.log(`${msg} just right`); yield date; }
+                if (center < chartWidth * 0.05) continue;
+                else if (center > chartWidth * 0.95) break;
+                else yield date;
             }
         }
 
@@ -607,7 +673,6 @@ export class Histogram {
             else dates = [dd[0], dd[Math.floor((dd.length - 1) / 2)], dd[dd.length - 1]];
             break;
         }
-        console.log(`${dates[0]}:${bi.left(dates[0]).toFixed(1)} ${dates[1] ? `${dates[1]}:${bi.left(dates[1]).toFixed(1)}` : '_'} ${dates[2]}:${bi.left(dates[2]).toFixed(1)}`);
 
         // That's enough to position and format the labels.
         const labels = [this.labelLeft, this.labelCenter, this.labelRight];
@@ -622,13 +687,13 @@ export class Histogram {
 
     /**
      * Saves current state to localStorage.
-     * INVARIANT: Only persists bounds, selection, and checksum as these need to survive page reloads.
+     * INVARIANT: Only persists bounds, selection, and fullRange as these need to survive page reloads.
      */
     private saveState(): void {
         const state = {
             bounds: this.bounds,
             selection: this.selection,
-            checksum: this.checksum
+            fullRange: this.fullRange,
         };
         localStorage.setItem('histogram-state', JSON.stringify(state));
     }
