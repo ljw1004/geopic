@@ -1,5 +1,6 @@
 // Tests+prototypes go here!
 // WE WILL LEAVE THIS FILE IN PLACE. IT SHOULD NOT BE REMOVED.
+const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /**
  * Converts a number in YYYYMMDD format to a Date object.
  */
@@ -180,6 +181,9 @@ function expandToMinimum(range) {
  *   showing the start and end dates of the selection. These three behaviors also apply while the user
  *   is adjust-dragging a selection edge, or new-dragging a new selection.
  *   The selection may be clipped, and its draggable edges may be out of bounds.
+ * - When the user hovers over any part of the chart that isn't a draggable edge, a thin black vertical
+ *   line appears centered on the bar and the full height of the bar area, and it has a tooltip under
+ *   it (in the label area) showing the date of that bar.
  * - When the user uses the mouse wheel, it zooms the bounds in and out centered on the cursor position,
  *   with maximum zoom levels according to limits from the current 'data' field (or has no effect if 'data'
  *   is undefined). Fully zoomed in is seven days. Fully zoomed out is the full range of dates in the
@@ -253,6 +257,7 @@ export class Histogram {
     fullRange;
     tally;
     currentDrag;
+    bi; // the latest state of the histogram bars (only meaningful if tally is defined)
     // DOM interaction
     container;
     chartArea;
@@ -269,6 +274,9 @@ export class Histogram {
     labelRight;
     focusIndicator;
     srAnnouncements;
+    hoverIndicator;
+    hoverTooltip;
+    currentHoverDate;
     onSelectionChange = () => { };
     /**
      * Constructor sets up the histogram component by finding existing DOM elements
@@ -291,22 +299,28 @@ export class Histogram {
         this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right');
         this.focusIndicator = container.querySelector('.histogram-focus-indicator');
         this.srAnnouncements = container.querySelector('.histogram-sr-announcements');
+        this.hoverIndicator = this.chartArea.querySelector('.histogram-hover-indicator');
+        this.hoverTooltip = this.labelsContainer.querySelector('.histogram-hover-tooltip');
         this.container.addEventListener('wheel', this.handleMouseWheel.bind(this));
         this.container.addEventListener('mousedown', this.handleMouseDown.bind(this));
+        this.container.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        this.container.addEventListener('mouseleave', this.handleMouseLeave.bind(this));
         this.container.addEventListener('keydown', this.handleKeyDown.bind(this));
         this.selectionEdgeLeft.addEventListener('dragstart', (e) => e.preventDefault());
         this.selectionEdgeRight.addEventListener('dragstart', (e) => e.preventDefault());
         document.addEventListener('keydown', this.handleGlobalKeyDown.bind(this));
         document.addEventListener('keyup', this.handleGlobalKeyUp.bind(this));
-        document.addEventListener('mousemove', this.handleMouseMove.bind(this));
-        document.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        document.addEventListener('mousemove', this.handleGlobalMouseMove.bind(this));
+        document.addEventListener('mouseup', this.handleGlobalMouseUp.bind(this));
         document.addEventListener('visibilitychange', this.handleVisibilityChange.bind(this));
         // Logical state
         this.tally = undefined;
         this.currentDrag = undefined;
+        this.currentHoverDate = undefined;
         this.bounds = { start: 0, end: 0 };
         this.selection = undefined;
         this.fullRange = { start: 0, end: 0 };
+        this.bi = undefined; // only defined if tally is defined
         // Try to fetch from last time
         const savedStateRaw = localStorage.getItem('histogram-state');
         if (savedStateRaw) {
@@ -392,6 +406,28 @@ export class Histogram {
         event.preventDefault();
     }
     handleMouseMove(event) {
+        // Handles the hover indicator
+        const chartRect = this.chartArea.getBoundingClientRect();
+        if (!this.tally || this.currentDrag || event.clientX < 0 || event.clientX >= chartRect.width) {
+            this.hideHoverIndicator();
+            return;
+        }
+        // Calculate which bar the mouse is over
+        const bar = Math.floor((event.clientX - chartRect.left) / chartRect.width * this.bi.count);
+        const date = this.bi.find(bar);
+        if (date === this.currentHoverDate)
+            return;
+        this.currentHoverDate = date;
+        const center = Math.round(this.bi.left(date) + this.bi.width / 2);
+        this.hoverIndicator.style.left = `${center}px`;
+        this.hoverIndicator.style.display = 'block';
+        const month = MONTHS[Math.floor(date / 100) % 100];
+        const text = this.bi.granularity === 'months' ? `${month} ${Math.floor(date / 10000)}` : `${date % 100} ${month}`;
+        this.hoverTooltip.textContent = `${text}`;
+        this.hoverTooltip.style.left = `${center}px`;
+        this.hoverTooltip.style.display = 'block';
+    }
+    handleGlobalMouseMove(event) {
         if (this.currentDrag?.type === 'pan') {
             const chartWidth = this.chartArea.offsetWidth;
             const dayCount = dayInterval(this.currentDrag.initialBounds);
@@ -413,7 +449,7 @@ export class Histogram {
             }
         }
     }
-    handleMouseUp(_event) {
+    handleGlobalMouseUp(_event) {
         if (this.currentDrag?.type === 'pan') {
             this.currentDrag = undefined;
             if (this.container.style.cursor === 'grabbing') {
@@ -421,6 +457,14 @@ export class Histogram {
             }
             this.saveState();
         }
+    }
+    handleMouseLeave(_event) {
+        this.hideHoverIndicator();
+    }
+    hideHoverIndicator() {
+        this.hoverIndicator.style.display = 'none';
+        this.hoverTooltip.style.display = 'none';
+        this.currentHoverDate = undefined;
     }
     handleKeyDown(_event) {
         // TODO: implement!
@@ -460,6 +504,7 @@ export class Histogram {
     }
     /**
      * Updates all DOM elements to match current state
+     * Stores derived information in this.bi
      */
     recomputeDOM() {
         this.chartArea.querySelectorAll('.histogram-bar').forEach(bar => bar.style.display = 'none');
@@ -470,9 +515,9 @@ export class Histogram {
             this.labelRight.textContent = '';
             return;
         }
-        const barBounds = this.recomputeDOM_bars(this.tally.dateCounts);
+        this.bi = this.recomputeDOM_bars(this.tally.dateCounts);
         this.recomputeDOM_selectionOverlay();
-        this.recomputeDOM_timeLabels(barBounds);
+        this.recomputeDOM_timeLabels(this.bi);
     }
     /**
      * This function recomputes DOM elements.
@@ -542,7 +587,7 @@ export class Histogram {
                     width: chartWidth / barCount,
                     find: (bar) => {
                         const month = Math.floor((bounds.start / 100) % 100) - 1 + bar; // 0-based, might be >12 (but we'll modulo it next)
-                        return (bounds.start / 10000 + Math.floor(month / 12)) * 10000 + (month % 12 + 1) * 100 + 1; // 1st of the month
+                        return (Math.floor(bounds.start / 10000) + Math.floor(month / 12)) * 10000 + (month % 12 + 1) * 100 + 1; // 1st of the month
                     },
                     count: barCount,
                     snap: (date) => Math.floor(date / 100) * 100 + 1,
@@ -661,8 +706,7 @@ export class Histogram {
             return `${Math.floor(date / 10000)}`;
         }
         function monthFmt(date, detailed) {
-            const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const month = months[Math.floor((date / 100) % 100)];
+            const month = MONTHS[Math.floor((date / 100) % 100)];
             return detailed ? `${month} ${yearFmt(date, true)}` : `${month}`;
         }
         function dayFmt(date, detailed) {
