@@ -1,7 +1,9 @@
 // Tests+prototypes go here!
 // WE WILL LEAVE THIS FILE IN PLACE. IT SHOULD NOT BE REMOVED.
 
-export {}
+import { Numdate, Tally } from "./geoitem";
+
+export { }
 
 /**
  * Converts a number in YYYYMMDD format to a Date object.
@@ -19,6 +21,8 @@ function numToDate(yyyymmdd: number): Date {
 function dayInterval(date0: number, date: number): number {
     return (numToDate(date).getTime() - numToDate(date0).getTime()) / (1000 * 60 * 60 * 24);
 }
+
+type InclusiveDateRange = { start: Numdate, end: Numdate };
 
 /**
  * HISTOGRAM TODO: DESIGN IDEAS
@@ -89,52 +93,373 @@ function dayInterval(date0: number, date: number): number {
  *   - Goal: "I want to find a photo of our house right after we bought it, and another one from this year to see how the
  *     garden has changed."
  *   - User Intent: The user needs to isolate a single location and then pinpoint two distinct moments in time associated with it.
+ * 
+ * HISTOGRAM API DESIGN
+ * 
+ * Construction
+ * - constructor(container: HTMLElement)
+ *   This sets up the histogram component, creating subsidiary elements as needed, and reads state from localStorage.
+ *   It will use the container's offsetWidth and offsetHeight.
+ *   All other options will be hard-coded; it will use hard-coded CSS identifiers and styles.
+ *   It doesn't yet display any data!
+ * 
+ * State
+ * - selection: {start: Numdate, end: Numdate} | undefined  // the date-range the user has selected
+ * - bounds: {start: Numdate, end: Numdate}   // the date-range currently visible
+ * - checksum: {start: Numdate, end: Numdate}  // a checksum for whether bounds and selection are valid
+ * - All three are private. They're persisted to localStorage, and read by the component upon construction.
+ *   (The only way for callers to learn about the selection is on the onSelectionChange event).
+ * - data: Tally | undefined
+ *   This private state is set by setData(). It lives only in memory (not persisted to localStorage).
+ *   It's present so that as the user zooms the histogram, the DOM elements can be recomputed.
+ * - currentDrag: ...
+ *   This is a private state used to track the current drag operations. We needn't go into details here.
+ * 
+ * Public methods and events
+ * - onSelectionChange(selection: {start:Numdate, end:Numdate} | undefined): void
+ *   When user makes an selection by clicking and dragging on the histogram, this event is fired
+ *   when the drag is released. When the user updates the selection by dragging an edge of an
+ *   existing selection, this event is fired during the drag (and hence not on release).
+ * - setData(data: Tally): void
+ *   If tally's range differs from checksum then we might update 'bounds' and 'selection' (the precise
+ *   logic is subtle and not worth documenting; it satisfies the goal of remembering the user's selection
+ *   if possible even in the common case that new photos are added past the end date, but also updating bounds
+ *   to reflect the new end date.)
+ *   It updates the 'checksum'. And if selection is undefined, it also updates 'bounds' appropriately.
+ *   Updates the 'data' state. Recomputes all DOM elements as needed.
+ *   If the tally contained no datapoints, then we set tally to 'undefined'.
+ * 
+ * Appearance and behavior
+ * - The histogram will display one bar per day if the current bounds would cause 100 or fewer bars,
+ *   otherwise it displays one bar per month. (Therefore, as the user zooms in and out, the histogram will
+ *   switch between months and days). In month mode each bar uses the sum of tallies for all days in that month.
+ *   Each bar is colored according to the tallies on that date (or sum of tallies on that month).
+ *   The details are unimportant for now, but in general a bar might be made
+ *   up of stacked vertical parts: blue (relating to inBounds tallies), grey (relating to outBounds tallies),
+ *   yellow (relating to inFilter tallies).
+ *   However, if data is undefined, then no DOM elements will be visible.
+ * - We use DOM element pooling for the bars, so they don't need to be recreated every time.
+ * - If selection is defined, the histogram displays a selection rectangle, a semi-transparent overlay.
+ *   If we are in months view, the visual selection rectangle is rounded to the full encompassing month
+ *   (even while the exact value of the 'selection' property might have its start or end land in the middle of a month);
+ *   the user will have to zoom into day-view to see the exact boundaries of the selection.
+ *   The edges of the selection have a few-pixel-wide draggable area. When the user hovers over them,
+ *   (1) the mouse pointer changes to a "horizontal resize" pointer, (2) the vertical edges are colored
+ *   slightly more intensely, (3) two small tooltips appear, like little flags attached to each edge,
+ *   showing the start and end dates of the selection. These three behaviors also apply while the user
+ *   is adjust-dragging a selection edge, or new-dragging a new selection.
+ *   The selection may be clipped, and its draggable edges may be out of bounds.
+ * - When the user uses the mouse wheel, it zooms the bounds in and out centered on the cursor position,
+ *   with maximum zoom levels according to limits from the current 'data' field (or has no effect if 'data'
+ *   is undefined). Fully zoomed in is seven days. Fully zoomed out is the full range of dates in the
+ *   'data.tally' field, or seven days, whichever is larger. In future zooms will be accompanied by
+ *   a brief 100-200ms animation, but for now they'll be instantaneous.
+ * - When the user clicks and drags while holding down Option (or Alt on Windows) then this is a pan:
+ *   the bounds will be updated while the user drags. No events are fired.)
+ * - When the user clicks and releases anywhere except a draggable edge, and a selection is present,
+ *   then it erases the selection and fires the onSelectionChange event. A click and release is defined
+ *   as one where (1) the click wasn't on a draggable edge, (2) the mouse pointer never moved more than
+ *   5 pixels horizontally or vertically while the duration was held down, (3) the release location
+ *   is within 5 pixels of the mouse-down location. (This last part might seem redundant, but it's not
+ *   if we calculate part (2) during mouse-move events, and the action was so quick that we never
+ *   got any mouse-move events during it). This stipulation is to support the scenario that the
+ *   user wants to select just a single day.
+ * - When the user clicks and drags on one a draggable part at the end of the selection, then every
+ *   change of date updates 'selection', updates the selection rectangle and draggable areas, and causes
+ *   an onSelectionChanged event to be fired. Note that if the user drags the left edge but drags it over
+ *   to the right, then what used to be the end edge is now the start edge!
+ *   The draggable edge always snaps to units of whole bars (be they days or months), not to precisely
+ *   where the mouse pointer is. Note that the non-dragged edge retains its exact date, not snapped.
+ *   In months view, if the edge we are dragging is the right edge of the selection then it's deemed to be
+ *   the last day of the month; if it's the left edge then it's deemed to be the first day of the month.
+ * - When the user clicks anywhere else and drags, then the at the start of this drag and upon every
+ *   change of date we update 'selection', and update the selection rectangle and draggable areas,
+ *   but we only fire onSelectionChanged when the drag is released. Note that the user might drag to
+ *   the left or to the right of where they initially clicked; hence which one counts as selection.start
+ *   and selection.end will depend on which way they've dragged.
+ * - In both cases of drags, if the user drags past the edge of the histogram, then this causes a pan
+ *   to happen at some suitable rate.
+ * - Incidentally, a selection of just one bar is a valid selection! e.g. if the user wants to see
+ *   photos from just one single day. Both edge-dragging and new-select-dragging support this.
+ * - Underneath the chart there'll be time labels. They will adjust to be appropriate to the current zoom level:
+ *   if we're zoomed out so far that only years make sense, they'll show years; if zoomed in more so that months
+ *   make sense then they'll show months; if zoomed in more then they'll show days. We should only show at
+ *   most three labels under the chart: one towards the left, one towards the right, one roughly centered.
+ *   They might not be exactly at the left/center/right of the chart, e.g. if the leftmost sensible label
+ *   to show is "2024" then we'd show it centered where 2024-01-01 is exactly.
+ * - Accessibility. The histogram will be focusable with tabindex="0". We'll activate keyboard support
+ *   when the user clicks on the histogram, or when the user tabs to it. If the user tabbed to it, then
+ *   we'll display a visual focus indicator: a tooltip that shows keyboard controls, and an outline.
+ *   Keyboard controls are (1) left/right to pan the bounds, +/- and =/- to zoom in and out centered
+ *   on the current center by a sensible amount ~10%, (2) shift+left/right to pan the selection,
+ *   and +/- and =/- to enlarge and shrink the selection by a sensible amount, (3) space to create
+ *   a selection in a sensible middle portion of the histogram, and esc to clear the selection.
+ *   Screen-reader support will report the start and end date of the selection whenever the selection
+ *   is changed.
+ * 
+ * DOM ELEMENT STRUCTURE
+ * div id="histogram-container" tabindex="0"
+ *   div class="histogram-chart"
+ *     div class="histogram-bar" style="display:none"  // availabe bars for re-use
+ *     div class="histogram-bar histogram-bar-{grey,blue,yellow}" style="display:block"  // in-use bars
+ *     div class="histogram-selection" // select overlay (display:none when no selection)
+ *       div class="histogram-selection-fill"  // the visual selection bar
+ *       div class="histogram-selection-edge histogram-left"   // draggable edge
+ *       div class="histogram-selection-edge histogram-right"  // draggable edge
+ *       div class="histogram-selection-tooltip histogram-left"
+ *       div class="histogram-selection-tooltip histogram-right"
+ *   div class="histogram-labels"
+ *     div class="histogram-label histogram-left"
+ *     div class="histogram-label histogram-center"
+ *     div class="histogram-label histogram-right"
+ *   div class="histogram-focus-indicator"
+ *     div class="histogram-keyboard-tooltip"
+ *   div class="histogram-sr-announcements"  // screen-reader
  */
-function renderHistogram(counts: Map<number, number>): void {
-    const WIDTH = 300;
-    const barContainer = document.getElementById('histogram-bars')!;
-    console.log(Object.keys(counts).length);
-    let [minDate, maxDate, maxCount] = [0, 0, 0];
-    for (const [date, count] of counts) {
-        minDate = (minDate && minDate < date) ? minDate : date;
-        maxDate = (maxDate && maxDate > date) ? maxDate : date;
-        maxCount = Math.max(maxCount, count);
+export class Histogram {
+    private bounds: InclusiveDateRange; // invariant: minimum 7 days
+    private selection: InclusiveDateRange | undefined;
+    private checksum: InclusiveDateRange;
+    private tally: Tally | undefined;
+    private currentDrag: undefined | {}; // TODO: define proper type for drag state
+
+    // DOM elements
+    private container: HTMLElement;
+    private chartArea: HTMLElement;
+    private barTemplate: HTMLElement;
+    private selectionOverlay: HTMLElement;
+    private selectionFill: HTMLElement;
+    private selectionEdgeLeft: HTMLElement;
+    private selectionEdgeRight: HTMLElement;
+    private selectionTooltipLeft: HTMLElement;
+    private selectionTooltipRight: HTMLElement;
+    private labelsContainer: HTMLElement;
+    private labelLeft: HTMLElement;
+    private labelCenter: HTMLElement;
+    private labelRight: HTMLElement;
+    private focusIndicator: HTMLElement;
+    private srAnnouncements: HTMLElement;
+
+    public onSelectionChange: (selection: { start: number, end: number } | undefined) => void = () => { };
+
+    /**
+     * Constructor sets up the histogram component by finding existing DOM elements
+     * and setting up event handlers. Reads state from localStorage.
+     */
+    constructor(container: HTMLElement) {
+        this.container = container;
+
+        // Find all DOM elements
+        this.chartArea = container.querySelector('.histogram-chart')!;
+        this.barTemplate = this.chartArea.querySelector('.histogram-bar')!;
+        this.selectionOverlay = container.querySelector('.histogram-selection')!;
+        this.selectionFill = this.selectionOverlay.querySelector('.histogram-selection-fill')!;
+        this.selectionEdgeLeft = this.selectionOverlay.querySelector('.histogram-selection-edge.histogram-left')!;
+        this.selectionEdgeRight = this.selectionOverlay.querySelector('.histogram-selection-edge.histogram-right')!;
+        this.selectionTooltipLeft = this.selectionOverlay.querySelector('.histogram-selection-tooltip.histogram-left')!;
+        this.selectionTooltipRight = this.selectionOverlay.querySelector('.histogram-selection-tooltip.histogram-right')!;
+        this.labelsContainer = container.querySelector('.histogram-labels')!;
+        this.labelLeft = this.labelsContainer.querySelector('.histogram-label.histogram-left')!;
+        this.labelCenter = this.labelsContainer.querySelector('.histogram-label.histogram-center')!;
+        this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right')!;
+        this.focusIndicator = container.querySelector('.histogram-focus-indicator')!;
+        this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
+
+        // Set up event handlers
+        this.container.addEventListener('wheel', this.handleMouseWheel.bind(this));
+        this.container.addEventListener('mousedown', this.handleMouseDown.bind(this));
+        this.container.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        this.container.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        this.container.addEventListener('keydown', this.handleKeyDown.bind(this));
+        this.selectionEdgeLeft.addEventListener('dragstart', (e) => e.preventDefault());
+        this.selectionEdgeRight.addEventListener('dragstart', (e) => e.preventDefault());
+
+        // Logical state
+        this.tally = undefined;
+        this.usesFilter = false;
+        this.currentDrag = undefined;
+        this.bounds = { start: 0, end: 0 };
+        this.selection = undefined;
+        this.checksum = { start: 0, end: 0 };
+        // Try to fetch from last time
+        const savedStateRaw = localStorage.getItem('histogram-state');
+        if (savedStateRaw) {
+            const savedState = JSON.parse(savedStateRaw);
+            this.bounds = savedState.bounds || { start: 20250101, end: 20251231 };
+            this.selection = savedState.selection || undefined;
+            this.checksum = savedState.checksum || { start: 0, end: 0 };
+        }
     }
-    const totalDays = dayInterval(minDate, maxDate);
-    for (const [day, count] of counts) {
-        const days = dayInterval(minDate, day);
-        const x = days / totalDays * WIDTH;
-        const width = 1 / totalDays * WIDTH;
 
-        const greyBar = document.createElement('div');
-        greyBar.className = 'bar bar-grey';
-        greyBar.style.left = `${x}px`;
-        greyBar.style.width = `${width}px`;
-        greyBar.style.height = `${count / maxCount * 100}%`;
-        barContainer.appendChild(greyBar);
+    /**
+     * Sets the data for the histogram, recomputs bounds, saves state, and updates the DOM.
+     */
+    setData(tally: Tally): void {
+        // If tally has no datapoints, set it to undefined and leave bounds and selection as they are
+        if (!tally || tally.dateCounts.size === 0) {
+            this.tally = undefined;
+        } else {
+            this.tally = tally;
 
-        const blueBar = document.createElement('div');
-        blueBar.className = 'bar bar-blue';
-        blueBar.style.left = `${x}px`;
-        blueBar.style.width = `${width}px`;
-        blueBar.style.height = `${count / maxCount * 50}%`;
-        barContainer.appendChild(blueBar);
+            // Compute maximums and minimums
+            let range: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
+            let bounds: InclusiveDateRange = { start: Number.MAX_SAFE_INTEGER, end: 0 };
+            for (const [date, counts] of tally.dateCounts) {
+                range.start = Math.min(range.start, date);
+                range.end = Math.max(range.end, date);
+                if (counts.inBounds.inFilter === 0 && counts.inBounds.outFilter === 0) continue;
+                bounds.start = Math.min(bounds.start, date);
+                bounds.end = Math.max(bounds.end, date);
+            }
+            if (bounds.end === 0) bounds = { start: range.start, end: range.end }; // If no inBounds data, use full range
+
+            // If tally's range agrees with checksum, then we can leave selection and bounds as they are. Otherwise...
+            if (this.checksum.start !== range.start || this.checksum.end !== range.end) {
+                // Should we erase the selection?
+                if (range.start !== this.checksum.start || range.end < this.checksum.end) this.selection = undefined;
+                // Should we update bounds?
+                if (this.selection && range.end > this.checksum.end) this.bounds.end = range.end;
+                else if (!this.selection) this.bounds = bounds; // TODO: minimum 7 days
+                // Final steps
+                this.checksum = range;
+                this.saveState();
+            }
+        }
+
+        this.recomputeDOM();
     }
 
-    // TODO: bar-chart pooling. We can't keep recreating this many DOM elements.
-    // We should re-use existing ones.
 
-    // TODO: add time labels.
-    // Underneath the chart there'll be time labels. They will adjust to be appropriate to the current zoom level:
-    // if we're zoomed out so far that only years make sense, they'll show years; if zoomed in more so that months
-    // make sense then they'll show months; if zoomed in more then they'll show days. We should only show at
-    // most three labels under the chart: one towards the left, one towards the right, one roughly centered.
-    // They might not be exactly at the left/center/right, e.g. if the leftmost sensible label to show is "2024"
-    // then we'd show it centered where 2024-01-01 is exactly.
-   
+    private handleMouseWheel(event: WheelEvent): void {
+        // TODO: implement!
+    }
+
+    private handleMouseDown(event: MouseEvent): void {
+        // TODO: implement!
+    }
+
+    private handleMouseMove(event: MouseEvent): void {
+        // TODO: implement!
+    }
+
+    private handleMouseUp(event: MouseEvent): void {
+        // TODO: implement!
+    }
+
+    private handleKeyDown(event: KeyboardEvent): void {
+        // TODO: implement!
+    }
+
+    /**
+     * Returns a bar from the pool, or creates a new one if none are available.
+     * The caller is responsible for setting style, display:block, content etc.
+     */
+    private getBarFromPool(): HTMLElement {
+        const existing = this.chartArea.querySelector('.histogram-bar[style*="display: none"]');
+        if (existing) {
+            return existing as HTMLElement;
+        } else {
+            const bar = this.barTemplate.cloneNode(true) as HTMLElement;
+            this.chartArea.appendChild(bar);
+            return bar;
+        }
+    }
+
+    /**
+     * Updates all DOM elements to match current state
+     */
+    private recomputeDOM(): void {
+        this.chartArea.querySelectorAll('.histogram-bar').forEach(bar => (bar as HTMLElement).style.display = 'none');
+
+        if (!this.tally) {
+            this.selectionOverlay.style.display = 'none';
+            this.labelLeft.textContent = '';
+            this.labelCenter.textContent = '';
+            this.labelRight.textContent = '';
+            return;
+        }
+
+        // For now, we'll only implement day-view
+        // TODO: implement month view when totalDays > 100
+
+        const [chartWidth, chartHeight] = [this.chartArea.offsetWidth, this.chartArea.offsetHeight];
+        const daySpan = dayInterval(this.bounds.start, this.bounds.end);
+
+        let maxCount = 0; // If there are no bars in range, this will be 0, but we'll avoid division by zero because no bars!
+        for (const [date, counts] of this.tally.dateCounts) {
+            if (date < this.bounds.start || date > this.bounds.end) continue;
+            const totalCount = counts.inBounds.inFilter + counts.inBounds.outFilter +
+                counts.outBounds.inFilter + counts.outBounds.outFilter;
+            maxCount = Math.max(maxCount, totalCount);
+        }
+
+        for (const [date, counts] of this.tally.dateCounts) {
+            if (date < this.bounds.start || date > this.bounds.end) continue;
+            const daysFromStart = dayInterval(this.bounds.start, date);
+            const x = (daysFromStart / daySpan) * chartWidth;
+            const barWidth = chartWidth / daySpan
+            // Render the bar. Blue/yellow/grey are disjoint.
+            const colorCounts = { blue: counts.inBounds.outFilter, yellow: counts.inBounds.inFilter + counts.outBounds.inFilter, grey: counts.outBounds.outFilter };
+            for (const color of (['blue', 'yellow', 'grey'] as const)) {
+                if (colorCounts[color] === 0) continue;
+                const bar = this.getBarFromPool();
+                bar.className = `histogram-bar histogram-bar-${color}`;
+                bar.style.left = `${x}px`;
+                bar.style.bottom = '0px';
+                bar.style.width = `${barWidth}px`;
+                bar.style.height = `${(colorCounts[color] / maxCount) * chartHeight}px`;
+                bar.style.display = 'block';
+            }
+        }
+        this.updateSelectionOverlay();
+        this.updateTimeLabels();
+    }
+
+    private updateSelectionOverlay(): void {
+        if (!this.selection) {
+            this.selectionOverlay.style.display = 'none';
+            return;
+        }
+
+        this.selectionOverlay.style.display = 'block';
+
+        // TODO: calculate selection position based on bounds and selection
+        // - convert selection dates to pixel positions
+        // - position fill and edges appropriately
+        // - ensure edges are draggable even if clipped
+    }
+
+    private updateTimeLabels(): void {
+        if (!this.tally) return;
+
+        // TODO: implement label logic
+        // - determine appropriate label granularity (years/months/days)
+        // - position labels at left/center/right
+        // - ensure labels are meaningful for current zoom level
+    }
+
+    /**
+     * Saves current state to localStorage.
+     * INVARIANT: Only persists bounds, selection, and checksum as these need to survive page reloads.
+     */
+    private saveState(): void {
+        const state = {
+            bounds: this.bounds,
+            selection: this.selection,
+            checksum: this.checksum
+        };
+        localStorage.setItem('histogram-state', JSON.stringify(state));
+    }
 }
 
-export function testHistogram(counts: Map<number, number>) {
-    renderHistogram(counts);
+
+let histogram: Histogram | undefined;
+
+export function testHistogram(tally: Tally) {
+    if (!histogram) {
+        const container = document.getElementById('histogram-container') as HTMLElement;
+        histogram = new Histogram(container);
+    }
+    histogram.setData(tally);
 }
 

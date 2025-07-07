@@ -7,28 +7,34 @@
         const initMapPromise = new Promise(resolve => window.initMap = resolve); // "defer" guarantees we run before google calls back
         document.addEventListener('DOMContentLoaded', async () => onBodyLoad(await initMapPromise));
     </script>
-    <script defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6u053DqLw1AeV23FNM9Tue-A9we6S01o&libraries=maps,marker&loading=async&callback=initMap"></script>
+    <script defer
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6u053DqLw1AeV23FNM9Tue-A9we6S01o&libraries=maps,marker&loading=async&callback=initMap"></script>
     <style>
         body {
             font-family: sans-serif;
             margin: 0;
             padding: 0;
             display: flex;
-            height: 100vh; /* Full viewport height */
+            height: 100vh;
+            /* Full viewport height */
         }
 
         #side-panel {
-            width: 280px; /* Four thumbnails wide, each 70px */
-            flex-shrink: 0; /* Prevent shrinking */
+            width: 280px;
+            /* Four thumbnails wide, each 70px */
+            flex-shrink: 0;
+            /* Prevent shrinking */
             display: flex;
             flex-direction: column;
             height: 100%;
             box-sizing: border-box;
-            overflow-y: hidden; /* Prevent body scroll */
+            overflow-y: hidden;
+            /* Prevent body scroll */
         }
 
         #map-container {
-            flex-grow: 1; /* Takes up remaining width */
+            flex-grow: 1;
+            /* Takes up remaining width */
             height: 100%;
         }
 
@@ -45,7 +51,8 @@
         }
 
         #instructions span {
-            color: #007bff; /* Standard link blue */
+            color: #007bff;
+            /* Standard link blue */
             cursor: pointer;
         }
 
@@ -54,10 +61,13 @@
         }
 
         .spinner {
-            border: 3px solid #f3f3f3; /* Light grey */
-            border-top: 3px solid #3498db; /* Blue */
+            border: 3px solid #f3f3f3;
+            /* Light grey */
+            border-top: 3px solid #3498db;
+            /* Blue */
             border-radius: 50%;
-            width: 1ex; /* Relative to font size */
+            width: 1ex;
+            /* Relative to font size */
             height: 1ex;
             animation: spin 1.5s linear infinite;
             display: inline-block;
@@ -65,8 +75,13 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         #instructions span:hover {
@@ -78,8 +93,10 @@
         }
 
         #thumbnails-scroll-area {
-            flex-grow: 1; /* Takes up remaining vertical space */
-            overflow-y: overlay; /* Superimpose scrollbar on content */
+            flex-grow: 1;
+            /* Takes up remaining vertical space */
+            overflow-y: overlay;
+            /* Superimpose scrollbar on content */
         }
 
         #thumbnails-grid {
@@ -90,7 +107,8 @@
         #thumbnails-grid img {
             width: 70px;
             height: 70px;
-            object-fit: cover; /* Ensures images are square without distortion */
+            object-fit: cover;
+            /* Ensures images are square without distortion */
             cursor: pointer;
         }
 
@@ -104,36 +122,158 @@
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 4px;
+            outline: none;
+            /* Remove default focus outline */
         }
 
-        #histogram-chart {
-            display: flex;
-            align-items: flex-end;
-            height: 60px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #ccc;
+        #histogram-container:focus .histogram-focus-indicator {
+            display: block !important;
         }
 
-        #histogram-bars {
-            flex-grow: 1;
+        .histogram-chart {
             position: relative;
-            height: 100%;
+            height: 60px;
+            background-color: #fafafa;
+            border: 1px solid #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
         }
 
-        #histogram-bars .bar {
+        .histogram-bar {
             position: absolute;
             bottom: 0;
-            width: 100%;
+            transition: opacity 0.1s ease;
         }
 
-        #histogram-bars .bar-grey {
-            background-color: #e0e0e0; /* Light grey */
+        .histogram-bar-grey {
+            background-color: #e0e0e0;
             z-index: 1;
         }
 
-        #histogram-bars .bar-blue {
-            background-color: #4a90e2; /* Blue */
+        .histogram-bar-blue {
+            background-color: #4a90e2;
             z-index: 2;
+        }
+
+        .histogram-bar-yellow {
+            background-color: #f1c40f;
+            z-index: 3;
+        }
+
+
+        .histogram-selection {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .histogram-selection-fill {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background-color: rgba(74, 144, 226, 0.2);
+            border: 1px solid #4a90e2;
+            border-top: none;
+            border-bottom: none;
+        }
+
+        .histogram-selection-edge {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 6px;
+            background-color: #4a90e2;
+            cursor: ew-resize;
+            pointer-events: auto;
+        }
+
+        .histogram-selection-edge.histogram-left {
+            left: -3px;
+        }
+
+        .histogram-selection-edge.histogram-right {
+            right: -3px;
+        }
+
+        .histogram-selection-edge:hover {
+            background-color: #357abd;
+        }
+
+        .histogram-selection-tooltip {
+            position: absolute;
+            top: -25px;
+            background-color: #333;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            white-space: nowrap;
+            pointer-events: none;
+            transform: translateX(-50%);
+            display: none;
+        }
+
+        .histogram-selection-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 4px solid transparent;
+            border-top-color: #333;
+        }
+
+        .histogram-selection-tooltip.histogram-left {
+            left: 0;
+        }
+
+        .histogram-selection-tooltip.histogram-right {
+            right: 0;
+            transform: translateX(50%);
+        }
+
+        .histogram-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            height: 20px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .histogram-label {
+            position: relative;
+        }
+
+        .histogram-label.histogram-center {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .histogram-focus-indicator {
+            display: none;
+            position: absolute;
+            top: -30px;
+            left: 0;
+            right: 0;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 3px;
+            padding: 5px;
+            font-size: 10px;
+            color: #6c757d;
+            z-index: 20;
+        }
+
+        .histogram-sr-announcements {
+            position: absolute;
+            left: -10000px;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
         }
     </style>
 </head>
@@ -148,10 +288,37 @@
         </div>
 
         <div id="filters">
-            <div id="histogram-container">
-                <div id="histogram-chart">
-                    <div id="histogram-bars"></div>
+            <div id="histogram-container" tabindex="0">
+                <div class="histogram-chart">
+                    <!-- Template bars for cloning -->
+                    <div class="histogram-bar histogram-bar-grey" style="display: none;"></div>
+
+                    <!-- Selection overlay (hidden by default) -->
+                    <div class="histogram-selection" style="display: none;">
+                        <div class="histogram-selection-fill"></div>
+                        <div class="histogram-selection-edge histogram-left"></div>
+                        <div class="histogram-selection-edge histogram-right"></div>
+                        <div class="histogram-selection-tooltip histogram-left"></div>
+                        <div class="histogram-selection-tooltip histogram-right"></div>
+                    </div>
                 </div>
+
+                <!-- Time labels -->
+                <div class="histogram-labels">
+                    <div class="histogram-label histogram-left"></div>
+                    <div class="histogram-label histogram-center"></div>
+                    <div class="histogram-label histogram-right"></div>
+                </div>
+
+                <!-- Accessibility elements -->
+                <div class="histogram-focus-indicator">
+                    <div class="histogram-keyboard-tooltip">
+                        Keyboard: ←/→ pan, +/- zoom, Shift+←/→ move selection, Space create, Esc clear
+                    </div>
+                </div>
+
+                <!-- Screen reader announcements -->
+                <div class="histogram-sr-announcements" aria-live="polite" aria-atomic="true"></div>
             </div>
         </div>
 
