@@ -16,7 +16,7 @@ type HistogramBarInfo = {
     bar: (date: Numdate) => number;  // bar number for this date (also works for out of range bars)
     left: (date: Numdate) => number;  // pixel coordinate of the left edge of the bar encompassing this date
     width: number;  // pixel width of each bar    
-    find: (bar: number) => Numdate; // finds the sentinel date for the bar (also works for out of range bars)
+    find: (bar: number) => Numdate; // finds the start date for the bar (also works for out of range bars)
     count: number; // number of bars in the histogram
     snap: (date: Numdate) => Numdate; // snaps a date to the sentinel date for its bar
 }
@@ -281,7 +281,8 @@ export class Histogram {
     private tally: Tally | undefined;
     private currentDrag: undefined
         | { type: 'pan', startX: number, initialBounds: InclusiveDateRange }
-        | { type: 'new-selection', startX: number, startY: number, hasBlown5Pixels: boolean, startDate: Numdate, currentDate: Numdate };
+        | { type: 'new-selection', startX: number, startY: number, hasBlown5Pixels: boolean, startDate: Numdate, currentDate: Numdate }
+        | { type: 'edge-selection', fixedEdge: Numdate };
     private bi: HistogramBarInfo; // the latest state of the histogram bars (only meaningful if tally is defined)
 
     // DOM interaction
@@ -455,6 +456,15 @@ export class Histogram {
             this.container.style.cursor = 'grabbing';
             event.preventDefault();
             return;
+        } else if (this.selection && (event.target === this.selectionEdgeLeft || event.target === this.selectionEdgeRight)) {
+            // An edge-drag operation
+            const fixedEdge = event.target === this.selectionEdgeLeft ? this.selection.end : this.selection.start;
+            this.currentDrag = {
+                type: 'edge-selection',
+                fixedEdge,
+            };
+            event.preventDefault();
+            return;
         } else {
             // A new-selection operation
             const bar = Math.floor(x / rect.width * this.bi.count);
@@ -468,7 +478,6 @@ export class Histogram {
                 hasBlown5Pixels: false,
             };
         }
-        // TODO: dragging a selection edge
     }
 
     private handleMouseMove(event: MouseEvent): void {
@@ -506,15 +515,24 @@ export class Histogram {
     }
 
     private handleGlobalMouseMove(event: MouseEvent): void {
+        const rect = this.chartArea.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+
+        const findLast = (bar: number): Numdate => {
+            const d = numToDate(this.bi.find(bar + 1)); // first day of the next bar
+            d.setDate(d.getDate() - 1); // last day of current bar
+            return dateToNum(d);
+        };
+
         if (this.currentDrag?.type === 'pan') {
-            const chartWidth = this.chartArea.offsetWidth;
+            // Pan drag
             const dayCount = dayInterval(this.currentDrag.initialBounds);
 
             // What's the furthest we can pan without exceeding fullRange?
             const minDeltaDays = dayInterval({ start: this.currentDrag.initialBounds.start, end: this.fullRange.start }) - 1;
             const maxDeltaDays = dayInterval({ start: this.currentDrag.initialBounds.end, end: this.fullRange.end }) - 1;
             const deltaX = this.currentDrag.startX - event.clientX; // represents the change we wish to make
-            const rawDeltaDays = Math.round(deltaX / chartWidth * dayCount);
+            const rawDeltaDays = Math.round(deltaX / rect.width * dayCount);
             const deltaDays = Math.min(maxDeltaDays, Math.max(minDeltaDays, rawDeltaDays));
 
             // Calculate new bounds based on deltaDays
@@ -528,12 +546,11 @@ export class Histogram {
                 this.recomputeDOM_chart();
             }
         } else if (this.currentDrag?.type === 'new-selection') {
+            // New-selection drag
             const moveDistance = Math.max(Math.abs(event.clientX - this.currentDrag.startX), Math.abs(event.clientY - this.currentDrag.startY));
             this.currentDrag.hasBlown5Pixels ||= moveDistance >= 5;
             if (!this.currentDrag.hasBlown5Pixels) return; // Not enough movement yet
 
-            const rect = this.chartArea.getBoundingClientRect();
-            const x = event.clientX - rect.left;
             const bar = Math.floor(x / rect.width * this.bi.count);
             const date = this.bi.find(bar);
             this.currentDrag.currentDate = date;
@@ -543,13 +560,29 @@ export class Histogram {
             };
             // in case of months/weeks view, our end date will be the last day of the bar.
             if (event.clientX > this.currentDrag.startX) {
-                const d = numToDate(this.bi.find(this.bi.bar(this.selection.end) + 1));
-                d.setDate(d.getDate() - 1);
-                this.selection.end = dateToNum(d);
+                this.selection.end = findLast(this.bi.bar(this.selection.end));
             }
             this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
             this.selectionTooltipLeft.style.display = event.clientX < this.currentDrag.startX ? 'block' : 'none';
             this.selectionTooltipRight.style.display = event.clientX > this.currentDrag.startX ? 'block' : 'none';
+        } else if (this.currentDrag?.type === 'edge-selection') {
+            // Edge-drag. The sense of the drag (hence whether we snap up or down) depends on where the drag is now.
+            const bar = Math.floor(x / rect.width * this.bi.count);
+            const fixedBar = this.bi.bar(this.currentDrag.fixedEdge);
+
+            if (bar < fixedBar) {
+                this.selection = { start: this.bi.find(bar), end: this.currentDrag.fixedEdge };
+            } else if (bar > fixedBar) {
+                this.selection = { start: this.currentDrag.fixedEdge, end: findLast(bar) };
+            } else {
+                this.selection = { start: this.bi.find(bar), end: findLast(bar) };
+            }
+
+            // Fire immediate event for edge dragging (per spec)
+            this.onSelectionChange(this.selection);
+            this.recomputeDOM_selectionOverlay();
+            this.selectionTooltipLeft.style.display = bar < fixedBar ? 'block' : 'none';
+            this.selectionTooltipRight.style.display = bar >= fixedBar ? 'block' : 'none';
         }
     }
 
@@ -565,8 +598,7 @@ export class Histogram {
             const moveDistance = Math.max(Math.abs(event.clientX - this.currentDrag.startX), Math.abs(event.clientY - this.currentDrag.startY));
             this.currentDrag.hasBlown5Pixels ||= moveDistance >= 5;
 
-            if (!this.currentDrag.hasBlown5Pixels && this.selection) {
-                // Click to deselect
+            if (!this.currentDrag.hasBlown5Pixels && this.selection) { // Click to deselect
                 this.selection = undefined;
                 this.onSelectionChange(undefined);
             } else {
@@ -576,6 +608,10 @@ export class Histogram {
             this.currentDrag = undefined;
             this.saveState();
             this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
+        } else if (this.currentDrag?.type === 'edge-selection') {
+            this.currentDrag = undefined;
+            this.saveState();
+            this.hideHoverIndicators('selection'); // Hide tooltips
         }
     }
 
