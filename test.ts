@@ -297,7 +297,7 @@ export class Histogram {
     private labelLeft: HTMLElement;
     private labelCenter: HTMLElement;
     private labelRight: HTMLElement;
-    // private srAnnouncements: HTMLElement;
+    private srAnnouncements: HTMLElement;
     private hoverIndicator: HTMLElement;
     private hoverTooltip: HTMLElement;
 
@@ -323,7 +323,7 @@ export class Histogram {
         this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right')!;
         this.selectionTooltipLeft = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-left')!;
         this.selectionTooltipRight = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-right')!;
-        // this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
+        this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
         this.hoverIndicator = this.chartArea.querySelector('.histogram-hover-indicator')!;
         this.hoverTooltip = this.labelsContainer.querySelector('.histogram-hover-tooltip')!;
         this.container.addEventListener('wheel', this.handleMouseWheel.bind(this));
@@ -575,7 +575,7 @@ export class Histogram {
             }
 
             // Fire immediate event for edge dragging (per spec)
-            this.onSelectionChange(this.selection);
+            this.reportSelectionChanged('event');
             this.recomputeDOM_selectionOverlay();
             this.selectionTooltipLeft.style.display = bar < fixedBar ? 'block' : 'none';
             this.selectionTooltipRight.style.display = bar >= fixedBar ? 'block' : 'none';
@@ -596,15 +596,14 @@ export class Histogram {
 
             if (!this.currentDrag.hasBlown5Pixels && this.selection) { // Click to deselect
                 this.selection = undefined;
-                this.onSelectionChange(undefined);
-            } else {
-                this.onSelectionChange(this.selection);
             }
+            this.reportSelectionChanged('all');
 
             this.currentDrag = undefined;
             this.saveState();
             this.recomputeDOM_selectionOverlay(); // recompute selection, but not bars/labels
         } else if (this.currentDrag?.type === 'edge-selection') {
+            this.reportSelectionChanged('screen-reader');
             this.currentDrag = undefined;
             this.saveState();
             this.hideHoverIndicators('selection'); // Hide tooltips
@@ -626,6 +625,30 @@ export class Histogram {
         if (indicators === 'selection' || indicators === 'all') {
             this.selectionTooltipLeft.style.display = 'none';
             this.selectionTooltipRight.style.display = 'none';
+        }
+    }
+
+    /**
+     * Reports that the selection has changed via onSelectionChange event.
+     * If alsoToScreenReader is true, it also tells the screen reader.
+     */
+    private reportSelectionChanged(mode: 'all' | 'event' | 'screen-reader'): void {
+        if (mode === 'all' || mode === 'event') {
+            this.onSelectionChange(this.selection);
+        }
+
+        if (mode === 'all' || mode === 'screen-reader') {
+            if (!this.selection) {
+                this.srAnnouncements.textContent = 'All dates';
+            } else {
+                const fmt = (date: Numdate): string => {
+                    const day = date % 100;
+                    const month = MONTHS[Math.floor(date / 100) % 100];
+                    const year = Math.floor(date / 10000);
+                    return `${day} ${month} ${year}`;
+                };
+                this.srAnnouncements.textContent = `${fmt(this.selection.start)} to ${fmt(this.selection.end)}`;
+            }
         }
     }
 
@@ -677,7 +700,7 @@ export class Histogram {
             const end = new Date(start);
             end.setDate(end.getDate() + daysWidth - 1); // -1 because range is inclusive            
             this.selection = { start: dateToNum(start), end: dateToNum(end) };
-            this.onSelectionChange(this.selection);
+            this.reportSelectionChanged('all');
             this.saveState();
             this.recomputeDOM_chart();
         } else if (event.shiftKey && (event.code === 'ArrowLeft' || event.code === 'ArrowRight')) {
@@ -695,7 +718,7 @@ export class Histogram {
             newStartDate.setDate(newStartDate.getDate() + deltaDays);
             newEndDate.setDate(newEndDate.getDate() + deltaDays);
             this.selection = { start: dateToNum(newStartDate), end: dateToNum(newEndDate) };
-            this.onSelectionChange(this.selection);
+            this.reportSelectionChanged('all');
             this.saveState();
             this.recomputeDOM_chart();
         } else if (event.shiftKey && (ZOOM_IN_CODES.includes(event.code) || ZOOM_OUT_CODES.includes(event.code))) {
@@ -714,7 +737,7 @@ export class Histogram {
                 start: Math.max(this.fullRange.start, attemptedBounds.start),
                 end: Math.min(this.fullRange.end, attemptedBounds.end)
             });
-            this.onSelectionChange(this.selection);
+            this.reportSelectionChanged('all');
             this.saveState();
             this.recomputeDOM_chart();
         } else if (event.code === 'Escape') {
@@ -722,6 +745,7 @@ export class Histogram {
             if (!this.selection) return;
             this.selection = undefined;
             this.onSelectionChange(undefined);
+            this.reportSelectionChanged('all');
             this.saveState();
             this.recomputeDOM_chart();
         }
