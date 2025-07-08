@@ -10,8 +10,8 @@
  */
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, asClusters } from './geoitem.js';
-import { testHistogram } from './test.js';
+import { generateImpl, asClusters, boundsForDateRange } from './geoitem.js';
+import { Histogram } from './histogram.js';
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
 import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
@@ -35,6 +35,10 @@ let MARKERS = [];
 let MARKER_LIBRARY;
 let MAP;
 /**
+ * HISTOGRAM INTEGRATION.
+ */
+let HISTOGRAM;
+/**
  * Sets up authentication and UI by:
  * (1) checking for a OneDrive access token via query-params and cookies,
  * (2) checking whether that access token is still good,
@@ -48,11 +52,33 @@ let MAP;
 export async function onBodyLoad() {
     MARKER_LIBRARY = await google.maps.importLibrary("marker");
     MAP = document.getElementById("map").innerMap;
+    HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
     // 1. First priority is to display local data if it exists, as quick as we can
+    // This is also where we wire up events from map and histogram
     const localCache = await dbGet();
+    let userHasMapWork = false;
+    let boundsChangedByCode = false;
+    let dateFilter;
     if (localCache) {
-        renderGeo(localCache.geoItems);
-        MAP.addListener('bounds_changed', () => renderGeo(localCache.geoItems));
+        MAP.addListener('bounds_changed', () => {
+            if (!boundsChangedByCode)
+                userHasMapWork = Boolean(dateFilter);
+            renderGeo(localCache.geoItems, dateFilter);
+        });
+        MAP.addListener('idle', () => boundsChangedByCode = false);
+        HISTOGRAM.onSelectionChange = (selection) => {
+            dateFilter = selection;
+            if (dateFilter && !userHasMapWork) {
+                const newBounds = boundsForDateRange(localCache.geoItems, dateFilter);
+                if (newBounds) {
+                    boundsChangedByCode = true;
+                    MAP.fitBounds(new google.maps.LatLngBounds(newBounds.sw, newBounds.ne));
+                    return;
+                }
+            }
+            renderGeo(localCache.geoItems, dateFilter);
+        };
+        renderGeo(localCache.geoItems, dateFilter);
     }
     // 2. Then, at our leisure, we figure out login status and stateleness
     let accessToken = new URLSearchParams(new URL(location.href).hash.replace(/^#/, '')).get("access_token");
@@ -106,7 +132,7 @@ export async function onBodyLoad() {
     document.getElementById('histogram-container')?.focus(); // TODO: remove this! is here just for testing
 }
 function instruct(instructions) {
-    instructions += '<br/><span id="clear">Clear cache...</span>';
+    // instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
@@ -132,50 +158,58 @@ export function onLogoutClick() {
     localStorage.removeItem('access_token');
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
-function renderGeo(geoItems) {
+function renderGeo(geoItems, dateRange) {
     for (const marker of MARKERS)
         marker.map = null;
     MARKERS = [];
     const bounds = MAP.getBounds();
     const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
-    const filter = { dateRange: undefined, text: undefined };
+    const filter = { dateRange, text: undefined };
     const [clusters, summary] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoItems, filter);
-    clusters.sort((a, b) => b.totalItems - a.totalItems);
-    testHistogram(summary);
+    HISTOGRAM.setData(summary);
+    clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
-        const item = cluster.someItems[0];
+        const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
         const content = document.createElement('div');
         content.style.position = 'relative';
-        content.title = cluster.totalItems > 1 ? `${cluster.totalItems} photos` : `${item.date}`;
+        content.title = cluster.totalPassFilterItems > 1 ? `${cluster.totalPassFilterItems} photos` : `${item.date}`;
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
         img.loading = 'lazy';
         img.style.width = '70px';
         img.style.height = '70px';
-        img.style.border = '1px solid white';
         img.style.borderRadius = '5px';
+        if (cluster.totalPassFilterItems === 0) {
+            img.style.filter = 'grayscale(100%)';
+            img.style.opacity = '0.4';
+        }
+        else {
+            img.style.border = '1px solid white';
+        }
         content.appendChild(img);
-        const badge = document.createElement('div');
-        badge.textContent = cluster.totalItems === 1 ? '' : cluster.totalItems.toString();
-        badge.style.position = 'absolute';
-        badge.style.top = '-5px';
-        badge.style.right = '-5px';
-        badge.style.backgroundColor = 'rgba(21, 132, 199, 0.9)';
-        badge.style.color = 'white';
-        badge.style.fontWeight = 'bold';
-        badge.style.fontSize = '12px';
-        badge.style.padding = '2px 6px';
-        badge.style.borderRadius = '12px';
-        badge.style.border = '1px solid white';
-        content.appendChild(badge);
-        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalItems });
+        if (cluster.totalPassFilterItems > 1) {
+            const badge = document.createElement('div');
+            badge.textContent = cluster.somePassFilterItems.length <= 1 ? '' : cluster.totalPassFilterItems.toString();
+            badge.style.position = 'absolute';
+            badge.style.top = '-5px';
+            badge.style.right = '-5px';
+            badge.style.backgroundColor = 'rgba(21, 132, 199, 0.9)';
+            badge.style.color = 'white';
+            badge.style.fontWeight = 'bold';
+            badge.style.fontSize = '12px';
+            badge.style.padding = '2px 6px';
+            badge.style.borderRadius = '12px';
+            badge.style.border = '1px solid white';
+            content.appendChild(badge);
+        }
+        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalPassFilterItems });
         marker.addListener('click', () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
         MARKERS.push(marker);
     }
     const thumbnailsDiv = document.getElementById('thumbnails-grid');
     thumbnailsDiv.innerHTML = '';
-    for (const item of clusters.flatMap(c => c.someItems).slice(0, 40)) {
+    for (const item of clusters.flatMap(c => c.somePassFilterItems).slice(0, 40)) {
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
         img.loading = 'lazy';
@@ -216,7 +250,7 @@ export async function onGenerateClick() {
         }
         else {
             geoItems.push(...update);
-            renderGeo(geoItems);
+            renderGeo(geoItems, undefined);
         }
     }
     const photosDriveItem = await r.json();

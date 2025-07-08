@@ -253,6 +253,24 @@ function lngWrap(lng) {
     return (lng + 180 + 360) % 360 - 180;
 }
 /**
+ * Returns the westmost of two longitudes -- the one that can be reached
+ * from the other by travelling less than 180 degrees westwards.
+ * If the two points are exactly opposite, the choice is arbitrary.
+ */
+function westmost(lng1, lng2) {
+    // use +720 instead of +360 to allow for mild non-normalization of input values (so we still get positive distance)
+    return (lng1 - lng2 + 720) % 360 < 180 ? lng2 : lng1;
+}
+/**
+ * Returns the eastmost of two longitudes -- the one that can be reached
+ * from the other by travelling less than 180 degrees eastwards.
+ * If the two points are exactly opposite, the choice is arbitrary.
+ */
+function eastmost(lng1, lng2) {
+    // use +720 instead of +360 to allow for mild non-normalization of input values
+    return (lng1 - lng2 + 720) % 360 < 180 ? lng1 : lng2;
+}
+/**
  * This function takes a map viewport, represented by (1) its lat/lng bounds, (2) its pixel dimensions.
  * It splits this into "clusters" (tiles), each cluster being an approximately 60x60 square of pixels (give or take;
  * if the pixelWidth/Height don't neatly divide into 60 then we'll use however many clusters best fit).
@@ -274,8 +292,9 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
     for (let y = 0; y < numTilesY; y++) {
         for (let x = 0; x < numTilesX; x++) {
             tiles.push({
-                someItems: [],
-                totalItems: 0,
+                somePassFilterItems: [],
+                totalPassFilterItems: 0,
+                oneFailFilterItem: undefined,
                 bounds: {
                     sw: { lat: swSnap.lat + y * tileSize, lng: lngWrap(swSnap.lng + x * tileSize) },
                     ne: { lat: swSnap.lat + (y + 1) * tileSize, lng: lngWrap(swSnap.lng + (x + 1) * tileSize) }
@@ -287,7 +306,7 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
     const dateCounts = new Map();
     // CARE! Following loop is hot; goal is 50,000 items in 5ms, but we're currently at 10ms
     for (const item of items) {
-        let tally = dateCounts.get(item.date); // TODO: this lookup costs 2ms
+        let tally = dateCounts.get(item.date); // PERF: this lookup costs 2ms
         if (!tally) {
             tally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
             dateCounts.set(item.date, tally);
@@ -298,13 +317,36 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
         const inFilter = filter.text !== undefined && (item.name.includes(filter.text) || item.tags.some(tag => tag.includes(filter.text)));
         const inDateRange = filter.dateRange === undefined || (item.date >= filter.dateRange.start && item.date < filter.dateRange.end);
         tally[inBounds ? 'inBounds' : 'outBounds'][inFilter ? 'inFilter' : 'outFilter']++;
-        if ((filter.text && !inFilter) || !inBounds || !inDateRange)
+        if (!inBounds)
             continue;
         const tile = tiles[y * numTilesX + x];
-        if (tile.someItems.length < MAX_ITEMS_PER_TILE)
-            tile.someItems.push(item); // TODO: this push costs 1ms
-        tile.totalItems++;
+        if ((filter.text && !inFilter) || !inDateRange) {
+            if (tile.oneFailFilterItem === undefined)
+                tile.oneFailFilterItem = item;
+            continue;
+        }
+        if (tile.somePassFilterItems.length < MAX_ITEMS_PER_TILE)
+            tile.somePassFilterItems.push(item); // PERF: this push costs 1ms
+        tile.totalPassFilterItems++;
     }
-    return [tiles.filter(t => t.someItems.length > 0), { dateCounts }];
+    return [tiles.filter(t => t.somePassFilterItems.length > 0 || t.oneFailFilterItem !== undefined), { dateCounts }];
+}
+export function boundsForDateRange(items, dateRange) {
+    let r = undefined;
+    for (const item of items) {
+        const inDateRange = dateRange === undefined || (item.date >= dateRange.start && item.date < dateRange.end);
+        if (!inDateRange)
+            continue;
+        if (r === undefined) {
+            r = { sw: structuredClone(item.position), ne: structuredClone(item.position) };
+        }
+        else {
+            r.sw.lat = Math.min(r.sw.lat, item.position.lat);
+            r.sw.lng = westmost(r.sw.lng, item.position.lng);
+            r.ne.lat = Math.max(r.ne.lat, item.position.lat);
+            r.ne.lng = eastmost(r.ne.lng, item.position.lng);
+        }
+    }
+    return r;
 }
 //# sourceMappingURL=geoitem.js.map
