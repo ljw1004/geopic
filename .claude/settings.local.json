@@ -30,7 +30,8 @@
       "Bash(shopt:*)",
       "Bash(echo:*)",
       "Bash(cp:*)",
-      "Bash(open https://unto.me/geopic)"
+      "Bash(open https://unto.me/geopic)",
+      "WebFetch(domain:support.google.com)"
     ],
     "deny": []
   }

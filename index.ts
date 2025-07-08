@@ -104,6 +104,8 @@ export async function onBodyLoad(): Promise<void> {
         instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
     }
     instruct(instructions);
+
+    document.getElementById('histogram-container')?.focus(); // TODO: remove this! is here just for testing
 }
 
 function instruct(instructions: string): void {

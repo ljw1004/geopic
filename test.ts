@@ -248,11 +248,11 @@ function expandToMinimum(range: InclusiveDateRange): InclusiveDateRange {
  * - Accessibility. The histogram will be focusable with tabindex="0". We'll activate keyboard support
  *   when the user clicks on the histogram, or when the user tabs to it. If the user tabbed to it, then
  *   we'll display a visual focus indicator: a tooltip that shows keyboard controls, and an outline.
- *   Keyboard controls are (1) left/right to pan the bounds, +/- and =/- to zoom in and out centered
+ *   Keyboard controls are (1) left/right to pan the bounds, up/+/= to zoom in, and down/- to zoom out centered
  *   on the current center by a sensible amount ~10%, (2) shift+left/right to pan the selection,
- *   and +/- and =/- to enlarge and shrink the selection by a sensible amount, (3) space to create
- *   a selection in a sensible middle portion of the histogram, and esc to clear the selection.
- *   Screen-reader support will report the start and end date of the selection whenever the selection
+ *   and shift with zoom keys to enlarge and shrink the selection by a sensible amount, but if no selection
+ *   exists then one is instead created in a sensible middle portion of the histogram, (4) esc to clear the
+ *   selection. Screen-reader support will report the start and end date of the selection whenever the selection
  *   is changed.
  * 
  * DOM ELEMENT STRUCTURE
@@ -264,14 +264,12 @@ function expandToMinimum(range: InclusiveDateRange): InclusiveDateRange {
  *       div class="histogram-selection-fill"  // the visual selection bar
  *       div class="histogram-selection-edge histogram-left"   // draggable edge
  *       div class="histogram-selection-edge histogram-right"  // draggable edge
- *       div class="histogram-selection-tooltip histogram-left"
- *       div class="histogram-selection-tooltip histogram-right"
  *   div class="histogram-labels"
  *     div class="histogram-label histogram-left"
  *     div class="histogram-label histogram-center"
  *     div class="histogram-label histogram-right"
- *   div class="histogram-focus-indicator"
- *     div class="histogram-keyboard-tooltip"
+ *     div class="histogram-selection-tooltip histogram-left"
+ *     div class="histogram-selection-tooltip histogram-right"
  *   div class="histogram-sr-announcements"  // screen-reader
  */
 export class Histogram {
@@ -299,7 +297,6 @@ export class Histogram {
     private labelLeft: HTMLElement;
     private labelCenter: HTMLElement;
     private labelRight: HTMLElement;
-    // private focusIndicator: HTMLElement;
     // private srAnnouncements: HTMLElement;
     private hoverIndicator: HTMLElement;
     private hoverTooltip: HTMLElement;
@@ -326,7 +323,6 @@ export class Histogram {
         this.labelRight = this.labelsContainer.querySelector('.histogram-label.histogram-right')!;
         this.selectionTooltipLeft = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-left')!;
         this.selectionTooltipRight = this.labelsContainer.querySelector('.histogram-selection-tooltip.histogram-right')!;
-        // this.focusIndicator = container.querySelector('.histogram-focus-indicator')!;
         // this.srAnnouncements = container.querySelector('.histogram-sr-announcements')!;
         this.hoverIndicator = this.chartArea.querySelector('.histogram-hover-indicator')!;
         this.hoverTooltip = this.labelsContainer.querySelector('.histogram-hover-tooltip')!;
@@ -633,8 +629,102 @@ export class Histogram {
         }
     }
 
-    private handleKeyDown(_event: KeyboardEvent): void {
-        // TODO: implement!
+    private handleKeyDown(event: KeyboardEvent): void {
+        if (!this.tally) return; // No data, no keyboard interaction
+        const ZOOM_IN_CODES = ['ArrowUp', 'Equal'];
+        const ZOOM_OUT_CODES = ['ArrowDown', 'Minus'];
+
+        if (!event.shiftKey && (event.code === 'ArrowLeft' || event.code === 'ArrowRight')) {
+            // PAN LEFT/RIGHT
+            event.preventDefault(); // Prevent page scrolling
+            const dayCount = dayInterval(this.bounds);
+            const panStepDays = Math.max(1, Math.round(dayCount * 0.1)); // 10% of current view, minimum 1 day
+            const intendedDeltaDays = event.code === 'ArrowLeft' ? -panStepDays : panStepDays;
+            const minDeltaDays = dayInterval({ start: this.bounds.start, end: this.fullRange.start }) - 1;
+            const maxDeltaDays = dayInterval({ start: this.bounds.end, end: this.fullRange.end }) - 1;
+            const deltaDays = Math.min(maxDeltaDays, Math.max(minDeltaDays, intendedDeltaDays));
+            if (deltaDays === 0) return;
+            const startDate = numToDate(this.bounds.start);
+            const endDate = numToDate(this.bounds.end);
+            startDate.setDate(startDate.getDate() + deltaDays);
+            endDate.setDate(endDate.getDate() + deltaDays);
+            this.bounds = { start: dateToNum(startDate), end: dateToNum(endDate) };
+            this.saveState();
+            this.recomputeDOM_chart();
+        } else if (!event.shiftKey && (ZOOM_IN_CODES.includes(event.code) || ZOOM_OUT_CODES.includes(event.code))) {
+            // ZOOM IN/OUT
+            event.preventDefault(); // Prevent page scrolling and default behavior
+            const [startMs, endMs] = [numToDate(this.bounds.start).getTime(), numToDate(this.bounds.end).getTime()];
+            const centerMs = startMs + (endMs - startMs) / 2; // Center of current view
+            const zoomFactor = ZOOM_IN_CODES.includes(event.code) ? 1.2 : 1 / 1.2; // 20% zoom step
+            const newSpanMs = (endMs - startMs) / zoomFactor;
+            const [newStartMs, newEndMs] = [centerMs - newSpanMs / 2, centerMs + newSpanMs / 2];
+            const attemptedBounds = { start: dateToNum(new Date(newStartMs)), end: dateToNum(new Date(newEndMs)) };
+            const newBounds = expandToMinimum({
+                start: Math.max(this.fullRange.start, attemptedBounds.start),
+                end: Math.min(this.fullRange.end, attemptedBounds.end)
+            });
+            this.bounds = newBounds;
+            this.saveState();
+            this.recomputeDOM_chart();
+        } else if (event.shiftKey && !this.selection && (event.code === 'ArrowLeft' || event.code === 'ArrowRight' || ZOOM_IN_CODES.includes(event.code) || ZOOM_OUT_CODES.includes(event.code))) {
+            // CREATE SELECTION
+            event.preventDefault();
+            const dayCount = dayInterval(this.bounds);
+            const daysWidth = Math.max(7, Math.round(dayCount * 0.2)); // 20% of current view, minimum 7 days            
+            const start = numToDate(this.bounds.start);
+            start.setDate(start.getDate() + Math.round((dayCount - daysWidth) / 2));
+            const end = new Date(start);
+            end.setDate(end.getDate() + daysWidth - 1); // -1 because range is inclusive            
+            this.selection = { start: dateToNum(start), end: dateToNum(end) };
+            this.onSelectionChange(this.selection);
+            this.saveState();
+            this.recomputeDOM_chart();
+        } else if (event.shiftKey && (event.code === 'ArrowLeft' || event.code === 'ArrowRight')) {
+            // MOVE SELECTION LEFT/RIGHT
+            event.preventDefault();
+            if (!this.selection) return; // already implied by the previous condition, but this refines the type            
+            const selectionDays = dayInterval(this.selection);
+            const moveStepDays = Math.max(1, Math.round(selectionDays * 0.1)); // 10% of selection width, minimum 1 day
+            const minDeltaDays = dayInterval({ start: this.selection.start, end: this.fullRange.start }) - 1;
+            const maxDeltaDays = dayInterval({ start: this.selection.end, end: this.fullRange.end }) - 1;
+            const attemptedDelta = event.code === 'ArrowLeft' ? -moveStepDays : moveStepDays;
+            const deltaDays = Math.min(maxDeltaDays, Math.max(minDeltaDays, attemptedDelta));
+            const newStartDate = numToDate(this.selection.start);
+            const newEndDate = numToDate(this.selection.end);
+            newStartDate.setDate(newStartDate.getDate() + deltaDays);
+            newEndDate.setDate(newEndDate.getDate() + deltaDays);
+            this.selection = { start: dateToNum(newStartDate), end: dateToNum(newEndDate) };
+            this.onSelectionChange(this.selection);
+            this.saveState();
+            this.recomputeDOM_chart();
+        } else if (event.shiftKey && (ZOOM_IN_CODES.includes(event.code) || ZOOM_OUT_CODES.includes(event.code))) {
+            // ENLARGE/SHRINK SELECTION
+            event.preventDefault();
+            if (!this.selection) return; // already implied by the previous condition, but this refines the type
+            const selectionDays = dayInterval(this.selection);
+            const centerMs = (numToDate(this.selection.start).getTime() + numToDate(this.selection.end).getTime()) / 2;
+            const sizeFactor = ZOOM_IN_CODES.includes(event.code) ? 1.2 : 1 / 1.2;
+            const newSelectionDays = Math.max(7, Math.round(selectionDays * sizeFactor)); // minimum 7 days
+            const halfSpanMs = (newSelectionDays - 1) * 24 * 60 * 60 * 1000 / 2; // -1 because range is inclusive
+            const newStartMs = centerMs - halfSpanMs;
+            const newEndMs = centerMs + halfSpanMs;
+            const attemptedBounds = { start: dateToNum(new Date(newStartMs)), end: dateToNum(new Date(newEndMs)) };
+            this.selection = expandToMinimum({
+                start: Math.max(this.fullRange.start, attemptedBounds.start),
+                end: Math.min(this.fullRange.end, attemptedBounds.end)
+            });
+            this.onSelectionChange(this.selection);
+            this.saveState();
+            this.recomputeDOM_chart();
+        } else if (event.code === 'Escape') {
+            event.preventDefault();
+            if (!this.selection) return;
+            this.selection = undefined;
+            this.onSelectionChange(undefined);
+            this.saveState();
+            this.recomputeDOM_chart();
+        }
     }
 
     private handleGlobalKeyDown(event: KeyboardEvent): void {

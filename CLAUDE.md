@@ -80,6 +80,13 @@ Only take action when the user gives clear implementation instructions like:
 If you are unclear whether the user has given explicit go-ahead, then ask them:
 - "Shall I ...?"
 
+## Code style
+
+I prefer clean documented minimal code. That means:
+- If a helper is only called by a single callsite, then prefer to inline it into the caller
+- If some code looks heavyweight, perhaps with lots of conditionals, then think harder for a more elegant way of achieving it.
+- Code should have comments, and functions should have docstrings. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon.
+- Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
 - Implement the histogram + filter UI currently described in test.ts

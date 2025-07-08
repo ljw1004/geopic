@@ -126,8 +126,10 @@
             /* Remove default focus outline */
         }
 
-        #histogram-container:focus .histogram-focus-indicator {
-            display: block !important;
+        /* Focus indicator - only show when focused via keyboard (tab) */
+        #histogram-container:focus-visible {
+            outline: 2px solid #0066cc;
+            outline-offset: -2px;
         }
 
         .histogram-chart {
@@ -255,21 +257,6 @@
             z-index: 15;
         }
 
-        .histogram-focus-indicator {
-            display: none;
-            position: absolute;
-            top: -30px;
-            left: 0;
-            right: 0;
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 3px;
-            padding: 5px;
-            font-size: 10px;
-            color: #6c757d;
-            z-index: 20;
-        }
-
         .histogram-sr-announcements {
             position: absolute;
             left: -10000px;
@@ -318,13 +305,6 @@
                     <div class="histogram-hover-tooltip" style="display: none;"></div>
                     <div class="histogram-selection-tooltip histogram-left"></div>
                     <div class="histogram-selection-tooltip histogram-right"></div>
-                </div>
-
-                <!-- Accessibility elements -->
-                <div class="histogram-focus-indicator">
-                    <div class="histogram-keyboard-tooltip">
-                        Keyboard: ←/→ pan, +/- zoom, Shift+←/→ move selection, Space create, Esc clear
-                    </div>
                 </div>
 
                 <!-- Screen reader announcements -->
