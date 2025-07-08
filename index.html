@@ -93,6 +93,36 @@
             margin-bottom: 5px;
         }
 
+        #text-filter-container {
+            padding: 5px 8px;
+        }
+
+        #text-filter {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        #text-filter:focus {
+            border-color: #0066cc;
+        }
+
+        #text-filter.filter-glow {
+            background-color: #fffacd;
+            border-color: #f1c40f;
+            box-shadow: 0 0 0 2px rgba(241, 196, 15, 0.2);
+        }
+
+        #text-filter::placeholder {
+            color: #999;
+            font-style: italic;
+        }
+
         #thumbnails-scroll-area {
             flex-grow: 1;
             /* Takes up remaining vertical space */
@@ -142,19 +172,16 @@
             position: absolute;
             bottom: 0;
             transition: opacity 0.1s ease;
-        }
-
-        .histogram-bar-grey {
             background-color: #e0e0e0;
             z-index: 1;
         }
 
-        .histogram-bar-blue {
+        .histogram-bar.in-bounds {
             background-color: #478ad8;
             z-index: 2;
         }
 
-        .histogram-bar-yellow {
+        .histogram-bar.filter-glow {
             background-color: #f1c40f;
             z-index: 3;
         }
@@ -264,6 +291,40 @@
             height: 1px;
             overflow: hidden;
         }
+
+        /* Map marker styles */
+        #map-container img {
+            width: 70px;
+            height: 70px;
+            border-radius: 5px;
+            border: 1px solid white;
+            object-fit: cover;
+        }
+
+        #map-container img.filtered-out {
+            filter: grayscale(70%) sepia(100%) hue-rotate(180deg) saturate(1.0);
+            opacity: 0.5;
+            border: none;
+        }
+
+        #map-container img.filter-glow {
+            box-shadow: 0 0 8px 3px rgba(241, 196, 15, 0.8);
+            border: 2px solid #f1c40f;
+        }
+
+        #map-container div {
+            position: relative;
+        }
+
+        #map-container span {
+            position: absolute;
+            bottom: 2px;
+            right: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+        }
     </style>
 </head>
 
@@ -310,6 +371,10 @@
                 <!-- Screen reader announcements -->
                 <div class="histogram-sr-announcements" aria-live="polite" aria-atomic="true"></div>
             </div>
+        </div>
+
+        <div id="text-filter-container">
+            <input type="text" id="text-filter" placeholder="" autocomplete="off" spellcheck="false" />
         </div>
 
         <div id="thumbnails-scroll-area">

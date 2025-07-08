@@ -905,13 +905,17 @@ export class Histogram {
         // Render the bar. Blue/yellow/grey are disjoint.
         for (const [date, counts] of barCounts) {
             if (date < bi.bounds.start || date > bi.bounds.end) continue;
-            const colorCounts = { blue: counts.inBounds.outFilter, yellow: counts.inBounds.inFilter + counts.outBounds.inFilter, grey: counts.outBounds.outFilter };
+            const colorCounts = { 
+                'in-bounds': counts.inBounds.outFilter, 
+                'filter-glow': counts.inBounds.inFilter + counts.outBounds.inFilter, 
+                'grey': counts.outBounds.outFilter 
+            };
             let bottom = 0;
-            for (const color of (['blue', 'yellow', 'grey'] as const)) {
-                if (colorCounts[color] === 0) continue;
+            for (const colorClass of (['in-bounds', 'filter-glow', 'grey'] as const)) {
+                if (colorCounts[colorClass] === 0) continue;
                 const bar = this.getBarFromPool();
-                const height = (colorCounts[color] / maxInBoundsCount) * chartHeight;
-                bar.className = `histogram-bar histogram-bar-${color}`;
+                const height = (colorCounts[colorClass] / maxInBoundsCount) * chartHeight;
+                bar.className = colorClass === 'grey' ? 'histogram-bar' : `histogram-bar ${colorClass}`;
                 bar.style.left = `${bi.left(date)}px`;
                 bar.style.bottom = `${bottom}px`;
                 bar.style.width = `${bi.width}px`;

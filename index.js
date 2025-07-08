@@ -35,10 +35,6 @@ let MARKERS = [];
 let MARKER_LIBRARY;
 let MAP;
 /**
- * HISTOGRAM INTEGRATION.
- */
-let HISTOGRAM;
-/**
  * Sets up authentication and UI by:
  * (1) checking for a OneDrive access token via query-params and cookies,
  * (2) checking whether that access token is still good,
@@ -52,33 +48,11 @@ let HISTOGRAM;
 export async function onBodyLoad() {
     MARKER_LIBRARY = await google.maps.importLibrary("marker");
     MAP = document.getElementById("map").innerMap;
-    HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
     // 1. First priority is to display local data if it exists, as quick as we can
     // This is also where we wire up events from map and histogram
     const localCache = await dbGet();
-    let userHasMapWork = false;
-    let boundsChangedByCode = false;
-    let dateFilter;
     if (localCache) {
-        MAP.addListener('bounds_changed', () => {
-            if (!boundsChangedByCode)
-                userHasMapWork = Boolean(dateFilter);
-            renderGeo(localCache.geoItems, dateFilter);
-        });
-        MAP.addListener('idle', () => boundsChangedByCode = false);
-        HISTOGRAM.onSelectionChange = (selection) => {
-            dateFilter = selection;
-            if (dateFilter && !userHasMapWork) {
-                const newBounds = boundsForDateRange(localCache.geoItems, dateFilter);
-                if (newBounds) {
-                    boundsChangedByCode = true;
-                    MAP.fitBounds(new google.maps.LatLngBounds(newBounds.sw, newBounds.ne));
-                    return;
-                }
-            }
-            renderGeo(localCache.geoItems, dateFilter);
-        };
-        renderGeo(localCache.geoItems, dateFilter);
+        displayAndManageInteractions(localCache);
     }
     // 2. Then, at our leisure, we figure out login status and stateleness
     let accessToken = new URLSearchParams(new URL(location.href).hash.replace(/^#/, '')).get("access_token");
@@ -129,10 +103,46 @@ export async function onBodyLoad() {
         instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
     }
     instruct(instructions);
-    document.getElementById('histogram-container')?.focus(); // TODO: remove this! is here just for testing
+}
+function displayAndManageInteractions(geoData) {
+    const HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
+    const TEXT_FILTER = document.getElementById('text-filter');
+    let userHasMapWork = false;
+    let boundsChangedByCode = false;
+    let filter = { dateRange: undefined, text: undefined };
+    MAP.addListener('bounds_changed', () => {
+        if (!boundsChangedByCode)
+            userHasMapWork = Boolean(filter.dateRange);
+        const tally = calcTallyAndRenderGeo(geoData, filter);
+        HISTOGRAM.setData(tally);
+    });
+    MAP.addListener('idle', () => boundsChangedByCode = false);
+    HISTOGRAM.onSelectionChange = (selection) => {
+        filter.dateRange = selection;
+        if (filter.dateRange && !userHasMapWork) {
+            const newBounds = boundsForDateRange(geoData, filter.dateRange);
+            if (newBounds) {
+                boundsChangedByCode = true;
+                MAP.fitBounds(new google.maps.LatLngBounds(newBounds.sw, newBounds.ne));
+                return;
+            }
+        }
+        const tally = calcTallyAndRenderGeo(geoData, filter);
+        HISTOGRAM.setData(tally);
+    };
+    TEXT_FILTER.addEventListener('input', () => {
+        const text = TEXT_FILTER.value.trim().toLowerCase();
+        filter.text = text ? text : undefined;
+        TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
+        const tally = calcTallyAndRenderGeo(geoData, filter);
+        HISTOGRAM.setData(tally);
+    });
+    TEXT_FILTER.placeholder = 'Filter, e.g. Person or 2024/03';
+    const tally = calcTallyAndRenderGeo(geoData, filter);
+    HISTOGRAM.setData(tally);
 }
 function instruct(instructions) {
-    // instructions += '<br/><span id="clear">Clear cache...</span>';
+    instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
@@ -158,49 +168,37 @@ export function onLogoutClick() {
     localStorage.removeItem('access_token');
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
-function renderGeo(geoItems, dateRange) {
+function calcTallyAndRenderGeo(geoData, filter) {
     for (const marker of MARKERS)
         marker.map = null;
     MARKERS = [];
     const bounds = MAP.getBounds();
     const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
-    const filter = { dateRange, text: undefined };
-    const [clusters, summary] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoItems, filter);
-    HISTOGRAM.setData(summary);
+    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoData, filter);
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
-        const content = document.createElement('div');
-        content.style.position = 'relative';
-        content.title = cluster.totalPassFilterItems > 1 ? `${cluster.totalPassFilterItems} photos` : `${item.date}`;
+        let content;
         const img = document.createElement('img');
         img.src = item.thumbnailUrl;
         img.loading = 'lazy';
-        img.style.width = '70px';
-        img.style.height = '70px';
-        img.style.borderRadius = '5px';
         if (cluster.totalPassFilterItems === 0) {
-            img.style.filter = 'grayscale(100%)';
-            img.style.opacity = '0.4';
+            img.className = 'filtered-out';
+        }
+        else if (filter.text) {
+            img.className = 'filter-glow';
+        }
+        if (cluster.totalPassFilterItems <= 1) {
+            content = img;
+            content.title = item.date.toString();
         }
         else {
-            img.style.border = '1px solid white';
-        }
-        content.appendChild(img);
-        if (cluster.totalPassFilterItems > 1) {
-            const badge = document.createElement('div');
-            badge.textContent = cluster.somePassFilterItems.length <= 1 ? '' : cluster.totalPassFilterItems.toString();
-            badge.style.position = 'absolute';
-            badge.style.top = '-5px';
-            badge.style.right = '-5px';
-            badge.style.backgroundColor = 'rgba(21, 132, 199, 0.9)';
-            badge.style.color = 'white';
-            badge.style.fontWeight = 'bold';
-            badge.style.fontSize = '12px';
-            badge.style.padding = '2px 6px';
-            badge.style.borderRadius = '12px';
-            badge.style.border = '1px solid white';
+            content = document.createElement('div');
+            content.title = `${cluster.totalPassFilterItems} photos`;
+            content.appendChild(img);
+            const badge = document.createElement('span');
+            badge.textContent = cluster.totalPassFilterItems.toString();
             content.appendChild(badge);
         }
         const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalPassFilterItems });
@@ -225,6 +223,7 @@ function renderGeo(geoItems, dateRange) {
         });
         thumbnailsDiv.appendChild(img);
     }
+    return tally;
 }
 /**
  * This function is called when the user clicks the "Generate" button.
@@ -241,16 +240,26 @@ export async function onGenerateClick() {
         instruct(`Error! Try <span id="logout">logging out</span> and then try again.<pre>${escapeHtml(reason)}</pre>`);
         return;
     }
-    const geoItems = [];
+    const temporaryGeoData = {
+        schemaVersion: 0,
+        id: '',
+        size: 0,
+        lastModifiedDateTime: '',
+        cTag: '',
+        eTag: '',
+        immediateChildCount: 0,
+        folders: [],
+        geoItems: [],
+    };
     function progress(update) {
         if (update.length === 0)
             return;
         if (typeof update[0] === 'string') {
-            document.getElementById('progress').textContent = [`${geoItems.length} photos so far`, ...update].join('\n');
+            document.getElementById('progress').textContent = [`${temporaryGeoData.geoItems.length} photos so far`, ...update].join('\n');
         }
         else {
-            geoItems.push(...update);
-            renderGeo(geoItems, undefined);
+            temporaryGeoData.geoItems.push(...update);
+            calcTallyAndRenderGeo(temporaryGeoData, { dateRange: undefined, text: undefined });
         }
     }
     const photosDriveItem = await r.json();
