@@ -12,6 +12,7 @@
 /// <reference types="google.maps" />
 import { generateImpl, asClusters, boundsForDateRange } from './geoitem.js';
 import { Histogram } from './histogram.js';
+import { ImgPool, MarkerPool } from './pools.js';
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
 import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
@@ -27,13 +28,10 @@ import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
  *    then we can still proceed with OneDrive access.
  */
 const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685'; // onedrive microsoft ID for my app, "GEOPIC", used to sign into Onedrive
-/**
- * GOOGLE MAPS INTEGRATION.
- * We need to keep this list ourselves, since google's Map object doesn't give them to us.
- */
-let MARKERS = [];
-let MARKER_LIBRARY;
+// Following are initialized in onBodyLoad()
 let MAP;
+let MARKER_POOL;
+let IMG_POOL;
 /**
  * Sets up authentication and UI by:
  * (1) checking for a OneDrive access token via query-params and cookies,
@@ -46,13 +44,14 @@ let MAP;
  * 2. The important document element IDs (geo, generate, logout, login) have correct visibility.
  */
 export async function onBodyLoad() {
-    MARKER_LIBRARY = await google.maps.importLibrary("marker");
     MAP = document.getElementById("map").innerMap;
+    MARKER_POOL = await MarkerPool.create(MAP);
+    IMG_POOL = new ImgPool(document.getElementById('thumbnails-grid'));
     // 1. First priority is to display local data if it exists, as quick as we can
     // This is also where we wire up events from map and histogram
     const localCache = await dbGet();
     if (localCache) {
-        displayAndManageInteractions(localCache);
+        await displayAndManageInteractions(localCache);
     }
     // 2. Then, at our leisure, we figure out login status and stateleness
     let accessToken = new URLSearchParams(new URL(location.href).hash.replace(/^#/, '')).get("access_token");
@@ -104,9 +103,10 @@ export async function onBodyLoad() {
     }
     instruct(instructions);
 }
-function displayAndManageInteractions(geoData) {
+async function displayAndManageInteractions(geoData) {
     const HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
     const TEXT_FILTER = document.getElementById('text-filter');
+    const MAP = document.getElementById("map").innerMap;
     let userHasMapWork = false;
     let boundsChangedByCode = false;
     let filter = { dateRange: undefined, text: undefined };
@@ -169,9 +169,6 @@ export function onLogoutClick() {
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
 function calcTallyAndRenderGeo(geoData, filter) {
-    for (const marker of MARKERS)
-        marker.map = null;
-    MARKERS = [];
     const bounds = MAP.getBounds();
     const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
@@ -179,39 +176,17 @@ function calcTallyAndRenderGeo(geoData, filter) {
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
-        let content;
-        const img = document.createElement('img');
-        img.src = item.thumbnailUrl;
-        img.loading = 'lazy';
-        if (cluster.totalPassFilterItems === 0) {
-            img.className = 'filtered-out';
-        }
-        else if (filter.text) {
-            img.className = 'filter-glow';
-        }
-        if (cluster.totalPassFilterItems <= 1) {
-            content = img;
-            content.title = item.date.toString();
-        }
-        else {
-            content = document.createElement('div');
-            content.title = `${cluster.totalPassFilterItems} photos`;
-            content.appendChild(img);
-            const badge = document.createElement('span');
-            badge.textContent = cluster.totalPassFilterItems.toString();
-            content.appendChild(badge);
-        }
-        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalPassFilterItems });
-        marker.addListener('click', () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
-        MARKERS.push(marker);
+        const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : filter.text ? 'filter-glow' : '';
+        const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
+        const onClick = () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
+        const marker = MARKER_POOL.add(item.thumbnailUrl, imgClassName, spanText, onClick);
+        marker.position = item.position;
+        marker.zIndex = cluster.totalPassFilterItems;
     }
-    const thumbnailsDiv = document.getElementById('thumbnails-grid');
-    thumbnailsDiv.innerHTML = '';
-    for (const item of clusters.flatMap(c => c.somePassFilterItems).slice(0, 40)) {
-        const img = document.createElement('img');
-        img.src = item.thumbnailUrl;
-        img.loading = 'lazy';
-        img.addEventListener('click', async () => {
+    MARKER_POOL.finishAdding();
+    for (const item of clusters.flatMap(c => c.somePassFilterItems).slice(0, 200)) {
+        const img = IMG_POOL.addImg(item.thumbnailUrl);
+        img.onclick = async () => {
             const accessToken = localStorage.getItem('access_token');
             if (!accessToken)
                 return;
@@ -220,9 +195,9 @@ function calcTallyAndRenderGeo(geoData, filter) {
                 throw new FetchError(r, await r.text());
             const url = (await r.json()).webUrl;
             window.open(url, 'geopic-image');
-        });
-        thumbnailsDiv.appendChild(img);
+        };
     }
+    IMG_POOL.finishAdding();
     return tally;
 }
 /**
