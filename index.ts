@@ -186,8 +186,8 @@ export function onLogoutClick(): void {
 
 function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
     const bounds = MAP.getBounds()!;
-    const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
-    const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
+    const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
+    const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoData, filter);
 
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems)
