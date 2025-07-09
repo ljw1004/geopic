@@ -31,13 +31,8 @@ import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
  */
 const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685'; // onedrive microsoft ID for my app, "GEOPIC", used to sign into Onedrive
 
-/**
- * GOOGLE MAPS INTEGRATION.
- * We need to keep this list ourselves, since google's Map object doesn't give them to us.
- */
-let MARKERS: google.maps.marker.AdvancedMarkerElement[] = [];
-let MARKER_LIBRARY: google.maps.MarkerLibrary;
-let MAP: google.maps.Map;
+let MAP: google.maps.Map; // initialized in onBodyLoad()
+let MARKER_POOL: MarkerPool; // initialized in onBodyLoad()
 
 
 /**
@@ -52,14 +47,14 @@ let MAP: google.maps.Map;
  * 2. The important document element IDs (geo, generate, logout, login) have correct visibility.
  */
 export async function onBodyLoad(): Promise<void> {
-    MARKER_LIBRARY = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
     MAP = (document.getElementById("map")! as google.maps.MapElement).innerMap;
+    MARKER_POOL = await MarkerPool.create(MAP);
 
     // 1. First priority is to display local data if it exists, as quick as we can
     // This is also where we wire up events from map and histogram
     const localCache = await dbGet<GeoData>();
     if (localCache) {
-        displayAndManageInteractions(localCache);
+        await displayAndManageInteractions(localCache);
     }
 
     // 2. Then, at our leisure, we figure out login status and stateleness
@@ -107,9 +102,11 @@ export async function onBodyLoad(): Promise<void> {
 
 }
 
-function displayAndManageInteractions(geoData: GeoData): void {
+async function displayAndManageInteractions(geoData: GeoData): Promise<void> {
     const HISTOGRAM = new Histogram(document.getElementById("histogram-container")!);
     const TEXT_FILTER = document.getElementById('text-filter') as HTMLInputElement;
+    const MAP = (document.getElementById("map")! as google.maps.MapElement).innerMap;
+
 
     let userHasMapWork = false;
     let boundsChangedByCode = false;
@@ -184,9 +181,6 @@ export function onLogoutClick(): void {
 }
 
 function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
-    for (const marker of MARKERS) marker.map = null;
-    MARKERS = [];
-
     const bounds = MAP.getBounds()!;
     const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
@@ -195,30 +189,14 @@ function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems)
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem!;
-        let content: HTMLElement;
-        const img = document.createElement('img');
-        img.src = item.thumbnailUrl;
-        img.loading = 'lazy';
-        if (cluster.totalPassFilterItems === 0) {
-            img.className = 'filtered-out';
-        } else if (filter.text) {
-            img.className = 'filter-glow';
-        }
-        if (cluster.totalPassFilterItems <= 1) {
-            content = img;
-            content.title = item.date.toString();
-        } else {
-            content = document.createElement('div');
-            content.title = `${cluster.totalPassFilterItems} photos`;
-            content.appendChild(img);
-            const badge = document.createElement('span');
-            badge.textContent = cluster.totalPassFilterItems.toString();
-            content.appendChild(badge);
-        }
-        const marker = new MARKER_LIBRARY.AdvancedMarkerElement({ map: MAP, content, position: item.position, zIndex: cluster.totalPassFilterItems });
-        marker.addListener('click', () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)));
-        MARKERS.push(marker);
+        const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : filter.text ? 'filter-glow' : '';
+        const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
+        const onClick = () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
+        const marker = MARKER_POOL.addMarker(item.thumbnailUrl, imgClassName, spanText, onClick);
+        marker.position = item.position;
+        marker.zIndex = cluster.totalPassFilterItems;
     }
+    MARKER_POOL.finishAddingMarkers();
 
     const thumbnailsDiv = document.getElementById('thumbnails-grid')!;
     thumbnailsDiv.innerHTML = '';
@@ -283,3 +261,178 @@ export async function onGenerateClick(): Promise<void> {
     await dbPut(geoData);
     instruct('Geopic <span title="logout" id="logout">⏏</span>');
 }
+
+
+
+/**
+ * INVARIANTS:
+ * - 'img' only contains markers that have content=<img/>
+ * - 'span' only contains markers that have content=<div><img/><span/></div>
+ * - the key is equal to the img src
+ * - if and only if we added a click handler, we stored it in the listener field
+ */
+type Markers = {
+    img: Map<string, { marker: google.maps.marker.AdvancedMarkerElement, listener: google.maps.MapsEventListener | undefined }>,
+    span: Map<string, { marker: google.maps.marker.AdvancedMarkerElement, listener: google.maps.MapsEventListener | undefined }>,
+}
+
+/**
+ * This class is a factory for image markers that belong to a google map,
+ * specifically for the case where the caller needs to refresh the entire
+ * list of markers on the map in one go. Each marker contains either
+ * content=<img/>, or content=<div><img/><span/></div>.
+ * Under the hood it's optimized to avoid dynamic allocation of markers or DOM elements.
+ * 
+ * How to use: any time the caller wants to refresh all markers on the map,
+ * it calls addMarker() for each one, then finishAddingMarkers() when done.
+ * (Implicitly, the first addMarker() after finishAddingMarkers() implies
+ * a fresh batch of markers).
+ * 
+ * Pooling strategy... It's easier to think of this procedurally. Think of a
+ * steady 'finished' state where we store a list of markers, some of which are on
+ * the map and some of which are unused. Then our refresh procedure starts, so all
+ * the ones which used to be on the map are set aside in a "potential for immediate
+ * reuse" area. One by one our refresh procedure adds markers to the map, either
+ * taking them from this immediate-reuse pool if they're an exact match, or taking
+ * them from the unused pool, or creating entirely new ones if none are available.
+ * At the end of the refresh procedure, everything left in this immediate-reuse pool
+ * gets moved into the unused pool, and our steady state has been restored.
+ * 
+ * The refresh procedure start is implicit in the first call to addMarker() after
+ * the previous finishAddingMarkers(). The refresh proceceure end happens when
+ * we call finishAddingMarkers(). If finishAddingMarkers() was called without
+ * any preceding addMarkers(), then that means the refresh procedure started and
+ * finished with no markers. (This is to support the case where no markers are wanted!)
+ */
+export class MarkerPool {
+    public state: {
+        kind: 'finished',
+        onMap: Markers, // all have .map=container
+        unused: Markers, // all have .map=null, and listeners undefined
+    } | {
+        kind: 'adding',
+        forImmediateReuse: Markers, // all have .map=container
+        onMap: Markers, // all have .map=container
+        unused: Markers, // all have .map=null, and listeners undefined
+    }
+
+    public static async create(map: google.maps.Map): Promise<MarkerPool> {
+        const markerLibrary = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
+        return new MarkerPool(markerLibrary, map);
+    }
+
+    private constructor(private MARKER_LIBRARY: google.maps.MarkerLibrary, private MAP: google.maps.Map) {
+        this.state = {
+            kind: 'finished',
+            onMap: { img: new Map(), span: new Map() },
+            unused: { img: new Map(), span: new Map() },
+        }
+    }
+
+    private static startAddingIfNeeded(state: MarkerPool['state']): Extract<MarkerPool['state'], { kind: 'adding' }> {
+        if (state.kind === 'adding') return state;
+        return {
+            kind: 'adding',
+            forImmediateReuse: state.onMap,
+            onMap: { img: new Map(), span: new Map() },
+            unused: state.unused,
+        };
+    }
+
+    /**
+     * Obtains a new marker, belonging to the map passed in the constructor.
+     * The marker will have content either <img/> or <div><img/><span/></div>
+     * depending on whether spanText was passed. The img will have the specified
+     * src and imgClassName (use empty string for none). The marker will have a click listener
+     * if specified. The caller is expected to .setPosition() and .setZIndex() as needed.
+     */
+    public addMarker(src: string, imgClassName: string, spanText: undefined | string, onClick: undefined | (() => void)): google.maps.marker.AdvancedMarkerElement {
+        this.state = MarkerPool.startAddingIfNeeded(this.state);
+
+        // The following code has several branches. They all establish some invariants:
+        // - marker is defined
+        // - marker.map === this.MAP
+        // - marker.content is either <img/> or <div><img/><span/></div> according to spanText
+
+        // Step 1. Attempt to reuse from immediate-reuse pool with exact matching src
+        const key = spanText === undefined ? 'img' : 'span';
+        let markerAndListener = this.state.forImmediateReuse[key].get(src);
+        if (markerAndListener) {
+            this.state.forImmediateReuse[key].delete(src);
+            // assuming invariant that forImmediateReuse has map=container
+            // assuming invariant that forImmediateReuse[key] has correct content type
+        } else {
+            // Step 2. Failing that, pick the oldest marker from the unused pool (even with different src)
+            const firstEntry = this.state.unused[key].entries().next();
+            if (!firstEntry.done) {
+                const oldSrc = firstEntry.value[0];
+                markerAndListener = firstEntry.value[1];
+                this.state.unused[key].delete(oldSrc);
+                markerAndListener.marker.map = this.MAP; // because unused has map=null
+                // assuming invariant that unused[key] has correct content type
+            } else {
+                const img = document.createElement('img');
+                img.loading = 'lazy';
+                let content: HTMLElement;
+                if (key === 'img') {
+                    content = img;
+                } else {
+                    content = document.createElement('div');
+                    content.appendChild(img);
+                    const badge = document.createElement('span');
+                    content.appendChild(badge);
+                }
+                const marker = new this.MARKER_LIBRARY.AdvancedMarkerElement({ map: this.MAP, content });
+                markerAndListener = { marker, listener: undefined };
+                // here we're establishing the invariants
+            }
+        }
+
+        // Now establish the invariant that marker has no listener that we installed
+        // Assuming invariant that Markers.listener is any listener that we installed.
+        const { marker, listener: oldListener } = markerAndListener;
+        oldListener?.remove();
+
+        // Now we'll set up its content, per our parameters
+        let img: HTMLImageElement;
+        if (spanText === undefined) {
+            img = marker.content as HTMLImageElement;
+        } else {
+            const div = marker.content as HTMLDivElement;
+            img = div.children[0] as HTMLImageElement;
+            const span = div.children[1] as HTMLSpanElement;
+            span.textContent = spanText;
+        }
+        if (img.src !== src) img.src = src;
+        if (img.className !== imgClassName) img.className = imgClassName;
+        const listener = onClick ? marker.addListener('click', onClick) : undefined;
+
+        // Final book-keeping. We've established all the invariants described in Markers type.
+        this.state.onMap[key].set(src, { marker, listener });
+        return marker;
+    }
+
+    /**
+     * Removes all markers from the map, except for those that were added by
+     * addMarker() since the last call to finishAddingMarkers().
+     */
+    public finishAddingMarkers(): void {
+        // In case the user called finishAddingMarkers() twice without any intervening addMarkers()
+        // to denote a map devoid of markers, we have to enter 'adding' state ourselves.
+        const { onMap, forImmediateReuse, unused } = MarkerPool.startAddingIfNeeded(this.state);
+
+        // Any remaining markers in immediate-reuse pool are moved to unused-pool
+        // We're modifying by reference the same 'unused' that we got by destructuring earlier.
+        for (const key of ['img', 'span'] as const) {
+            for (const [src, { marker, listener }] of forImmediateReuse[key]) {
+                marker.map = null; // establish the invariant for unused, that map=null
+                listener?.remove(); // establish the invariant for unused, that listener is undefined
+                // other invariants (about content-type and key) carry over
+                unused[key].set(src, { marker, listener: undefined });
+            }
+        }
+
+        this.state = { kind: 'finished', onMap, unused };
+    }
+}
+
