@@ -1,5 +1,5 @@
-import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
-const SCHEMA_VERSION = 4;
+import { FetchError, authFetch, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
+const SCHEMA_VERSION = 5;
 ;
 function cacheFilename(path) {
     if (path.length === 0)
@@ -109,7 +109,7 @@ async function resolveThumbnails(f, item) {
  *
  * TODO: when cache is invalid but exists, any cached geoItems (with thumbnails) are still valid and should be used.
  */
-export async function generateImpl(progress, accessToken, photosDriveItem) {
+export async function generateImpl(progress, photosDriveItem) {
     const waiting = new Map();
     const toProcess = [];
     const toFetch = [createStartWorkItem(photosDriveItem, [])];
@@ -162,7 +162,7 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
                 }
             }
             item.data.immediateChildCount = item.data.geoItems.length;
-            if (item.data.immediateChildCount === 0)
+            if (item.data.immediateChildCount > 0)
                 item.data.folders.push(item.path.join('/').toLowerCase());
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
@@ -204,7 +204,7 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
                 }
                 else {
                     const logpct = (count, total) => log(parent)(`upload ${Math.floor(count / total * 100)}%`);
-                    await multipartUpload(logpct, cacheFilename(parent.path), data, accessToken);
+                    await multipartUpload(logpct, cacheFilename(parent.path), data);
                     toProcess.unshift({ ...parent, state: 'END', responses: {}, requests: [] });
                 }
             }
@@ -220,11 +220,10 @@ export async function generateImpl(progress, accessToken, photosDriveItem) {
             let batchResponse = null;
             while (true) {
                 const body = JSON.stringify({ requests });
-                batchResponse = await fetch('https://graph.microsoft.com/v1.0/$batch', {
+                batchResponse = await authFetch('https://graph.microsoft.com/v1.0/$batch', {
                     'method': 'POST',
                     'headers': {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${accessToken}`
                     },
                     'body': body
                 });
@@ -281,7 +280,7 @@ function eastmost(lng1, lng2) {
  * (1) a list of up to 20 items in that cluster, (2) the total count of items in that cluster.
  * The tiling is "stable": when the user pans the map, cluster boundaries remain fixed.
  */
-export function asClusters(sw, ne, pixelWidth, items, filter) {
+export function asClusters(sw, ne, pixelWidth, geoData, filter) {
     const TILE_SIZE_PX = 60;
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
@@ -303,9 +302,12 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
             });
         }
     }
+    const filterText = filter.text ? filter.text.toLowerCase() : undefined;
+    const filterFolders = filterText === undefined ? new Set() :
+        new Set(geoData.folders.map((f, i) => f.includes(filterText) ? i : -1).filter(i => i !== -1));
     const dateCounts = new Map();
     // CARE! Following loop is hot; goal is 50,000 items in 5ms, but we're currently at 10ms
-    for (const item of items) {
+    for (const item of geoData.geoItems) {
         let tally = dateCounts.get(item.date); // PERF: this lookup costs 2ms
         if (!tally) {
             tally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
@@ -314,7 +316,7 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
         const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
         const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
         const inBounds = (x >= 0 && x < numTilesX && y >= 0 && y < numTilesY);
-        const inFilter = filter.text !== undefined && (item.name.includes(filter.text) || item.tags.some(tag => tag.includes(filter.text)));
+        const inFilter = filterText !== undefined && (item.name.includes(filterText) || filterFolders.has(item.folderIndex) || item.tags.some(tag => tag.includes(filterText)));
         const inDateRange = filter.dateRange === undefined || (item.date >= filter.dateRange.start && item.date < filter.dateRange.end);
         tally[inBounds ? 'inBounds' : 'outBounds'][inFilter ? 'inFilter' : 'outFilter']++;
         if (!inBounds)
@@ -331,9 +333,9 @@ export function asClusters(sw, ne, pixelWidth, items, filter) {
     }
     return [tiles.filter(t => t.somePassFilterItems.length > 0 || t.oneFailFilterItem !== undefined), { dateCounts }];
 }
-export function boundsForDateRange(items, dateRange) {
+export function boundsForDateRange(geoData, dateRange) {
     let r = undefined;
-    for (const item of items) {
+    for (const item of geoData.geoItems) {
         const inDateRange = dateRange === undefined || (item.date >= dateRange.start && item.date < dateRange.end);
         if (!inDateRange)
             continue;

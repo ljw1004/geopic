@@ -15,76 +15,77 @@ import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import { dbGet, dbPut, escapeHtml, FetchError } from './utils.js';
+import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError } from './utils.js';
 /**
- * ONEDRIVE INTEGRATION AND CREDENTIALS.
- * 1. Upon first use, user navigates to the page "index.html"
- * 2. The user clicks the Login button, which takes them to a Microsoft-own signin page, then upon signin
- *    they get redirected back to this page with query-params ?access_token=...
- * 3. So, if this page is loaded with those query-params in the URL, we can proceed to offer onedrive functionality
- *    via the Microsoft Graph API.
- * 4. We store the query-params in cookies so that if the user navigates to index.html without query params
- *    BUT their cookies are still valid (as evinced by a successful query for PHOTOS_FOLDER_ID),
- *    then we can still proceed with OneDrive access.
+ * ONEDRIVE INTEGRATION AND CREDENTIALS: CODE FLOW WITH PKCE
+ * 1. The user navigates to "index.html" and we offer a login button, which they click.
+ * 2. We locally invent a challenge and verifier. We store the verifier in sessionStorage,
+ *    and redirect the user to a Microsoft-owned signin page with that challenge.
+ *    Upon signin, they get redirected back to this page "index.html" but with ?code=...
+ * 3. We redeem that code into an access token and refresh token, by making a fetch call
+ *    (not a redirect) to a Microsoft endpoint, sending the code and the verifier.
+ *    At this point we'll remove the verifier from sessionStorage.
+ * 4. We store the access_token in localStorage, and use it any time we want to make a request.
+ * 5. We also store the refresh_token in localStorage. If we ever find that the access
+ *    token is expired (typically because we get back a 401 Unauthorized response)
+ *    then we make another fetch call to a Microsoft endpoint to get another
+ *    access token and refresh token, which we again store in localStorage.
+ * 6. If ever a user visits index.html again and we have access_token in localStorage,
+ *    we'll try it! and if that doesn't work, we'll try to refresh it.
+ *    If the refresh has been revoked, then we remove both from localStorage.
  */
 const CLIENT_ID = 'e5461ba2-5cd4-4a14-ac80-9be4c017b685'; // onedrive microsoft ID for my app, "GEOPIC", used to sign into Onedrive
+localStorage.setItem('client_id', CLIENT_ID);
 // Following are initialized in onBodyLoad()
 let MAP;
 let MARKER_POOL;
 let IMG_POOL;
 /**
- * Sets up authentication and UI by:
- * (1) checking for a OneDrive access token via query-params and cookies,
- * (2) checking whether that access token is still good,
- * (3) updating visibility of various page elements based on whether access token is still good,
- *     and whether a geo.json file already exists
- *
- * INVARIANT: at the end of this function,
- * 1. The localStorage item 'access_token' is set to a valid access token, or removed if not valid.
- * 2. The important document element IDs (geo, generate, logout, login) have correct visibility.
+ * Sets up authentication and UI.
+ * - If we have local cache of geoData, we set up map, thumbnails, histogram
+ * - If we have a ?code= param from OAuth2 redirect, we redeem it for tokens and proceed.
+ * - We attempt to fetch the Photos folder, to learn if the access_token is valid or can
+ *   be refreshed, and if the local cache is up to date.
+ * - We display instructions based on login and staleness.
  */
 export async function onBodyLoad() {
     MAP = document.getElementById("map").innerMap;
     MARKER_POOL = await MarkerPool.create(MAP);
     IMG_POOL = new ImgPool(document.getElementById('thumbnails-grid'));
-    // 1. First priority is to display local data if it exists, as quick as we can
-    // This is also where we wire up events from map and histogram
+    // Set up map, thumbnails, histogram
     const localCache = await dbGet();
-    if (localCache) {
+    if (localCache)
         await displayAndManageInteractions(localCache);
+    // Dispatch ?code=... param from OAuth2 redirect
+    const code = new URLSearchParams(new URL(location.href).search).get('code');
+    if (code) {
+        const code_verifier = sessionStorage.getItem('code_verifier');
+        sessionStorage.removeItem('code_verifier');
+        const r = await exchangeCodeForToken(CLIENT_ID, code, code_verifier);
+        if (r instanceof FetchError) {
+            console.error(r.message);
+        }
+        else {
+            localStorage.setItem('access_token', r.accessToken);
+            localStorage.setItem('refresh_token', r.refreshToken);
+        }
+        window.history.replaceState(null, '', window.location.pathname);
     }
-    // 2. Then, at our leisure, we figure out login status and stateleness
-    let accessToken = new URLSearchParams(new URL(location.href).hash.replace(/^#/, '')).get("access_token");
-    if (accessToken) {
-        localStorage.setItem('access_token', accessToken);
-    }
-    else {
-        accessToken = localStorage.getItem('access_token');
-    }
-    // 3. Attempt to get geoData, and validate access token. Outcomes:
+    // Attempt to get Pictures metadata (so validating access token) and validate local cache. Outcomes:
     // - (!accessToken, !geoData, !status) -- user is signed out, no geo data
     // - (!accessToken, geoData, !status) -- user is signed out, geo data from local, we don't know if it's fresh or stale
     // - (accessToken, !geoData, !status) -- user is signed in but no geo data has ever been generated
     // - (accessToken, geoData, fresh|stale) -- user is signed in, geo data from most recent onedrive generation
-    let status;
     let photosDriveItem = null;
-    if (accessToken) {
-        document.getElementById('instructions').innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
-        const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
-        try {
-            if (r.ok)
-                photosDriveItem = await r.json();
-        }
-        catch { }
+    document.getElementById('instructions').innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
+    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
+    try {
+        if (r.ok)
+            photosDriveItem = await r.json();
     }
-    if (!photosDriveItem) {
-        localStorage.removeItem('access_token');
-        accessToken = null;
-    }
-    else if (localCache) {
-        status = localCache.size === photosDriveItem.size ? 'fresh' : 'stale';
-    }
-    // 4. Update UI elements
+    catch { }
+    const status = photosDriveItem && localCache ? (localCache.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
+    // Update UI elements
     let instructions = 'Geopic';
     if (status === 'fresh') {
         instructions = `Geopic. ${localCache?.geoItems.length} photos <span title="logout" id="logout">⏏</span>`;
@@ -92,7 +93,7 @@ export async function onBodyLoad() {
     else if (status === 'stale') {
         instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">⏏</span>';
     }
-    else if (accessToken) {
+    else if (localStorage.getItem('access_token')) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">⏏</span>';
     }
     else if (localCache) {
@@ -154,12 +155,25 @@ async function onClearClick() {
     location.reload();
 }
 /**
- * Handles the login button click event.
- * Redirects the user to Microsoft OAuth2 login page with appropriate permissions.
- * After successful login, Microsoft will redirect back to this page with access token.
+ * Handles the login button click event with OAuth2 PKCE code-flow:
+ * - sets up code_challenge and code_verifier
+ * - stores the latter in sessionStorage where the response to index.html?code=... will find it (so as to redeem the code)
+ * - redirects to the Microsoft login page, with a redirect back to index.html?code=...
  */
-export function onLoginClick() {
-    location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${CLIENT_ID}&scope=files.readwrite&response_type=token&redirect_uri=${location.href}`;
+export async function onLoginClick() {
+    const base64url = (array) => btoa(String.fromCharCode.apply(null, Array.from(array))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    const code_verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+    const code_challenge = base64url(new Uint8Array((await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code_verifier)))));
+    sessionStorage.setItem('code_verifier', code_verifier);
+    const params = new URLSearchParams({
+        client_id: CLIENT_ID,
+        response_type: 'code',
+        redirect_uri: window.location.origin + window.location.pathname,
+        scope: 'files.readwrite offline_access',
+        code_challenge,
+        code_challenge_method: 'S256'
+    });
+    location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
 }
 /**
  * Handles the logout button click event.
@@ -187,10 +201,7 @@ function calcTallyAndRenderGeo(geoData, filter) {
     for (const item of clusters.flatMap(c => c.somePassFilterItems).slice(0, 200)) {
         const img = IMG_POOL.addImg(item.thumbnailUrl);
         img.onclick = async () => {
-            const accessToken = localStorage.getItem('access_token');
-            if (!accessToken)
-                return;
-            const r = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${item.id}?select=webUrl`, { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
+            const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${item.id}?select=webUrl`);
             if (!r.ok)
                 throw new FetchError(r, await r.text());
             const url = (await r.json()).webUrl;
@@ -207,8 +218,7 @@ function calcTallyAndRenderGeo(geoData, filter) {
  */
 export async function onGenerateClick() {
     instruct(`<span class="spinner"></span> Ingesting photos...<br/>A full index takes ~30mins for 100,000 photos on a good network; incremental updates will finish in just seconds. If you reload this page, it will pick up where it left off. <pre id="progress">[...preparing bulk indexer...]</pre>`);
-    const accessToken = localStorage.getItem('access_token');
-    const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', { 'headers': { 'Authorization': `Bearer ${accessToken}` } });
+    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos');
     if (!r.ok) {
         const reason = await r.text();
         console.error(reason);
@@ -238,7 +248,7 @@ export async function onGenerateClick() {
         }
     }
     const photosDriveItem = await r.json();
-    const geoData = await generateImpl(progress, accessToken, photosDriveItem);
+    const geoData = await generateImpl(progress, photosDriveItem);
     await dbPut(geoData);
     instruct('Geopic <span title="logout" id="logout">⏏</span>');
 }

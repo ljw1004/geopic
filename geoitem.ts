@@ -1,6 +1,6 @@
-import { FetchError, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
+import { FetchError, authFetch, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /**
  * Numdate is a compact way of storing dates, in integer numbers, YYYYMMDD format.
@@ -229,7 +229,7 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
  * 
  * TODO: when cache is invalid but exists, any cached geoItems (with thumbnails) are still valid and should be used.
  */
-export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, accessToken: string, photosDriveItem: any): Promise<GeoData> {
+export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, photosDriveItem: any): Promise<GeoData> {
     const waiting = new Map<string, WorkItem>();
     const toProcess: WorkItem[] = [];
     const toFetch: WorkItem[] = [createStartWorkItem(photosDriveItem, [])];
@@ -283,7 +283,7 @@ export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, 
                 }
             }
             item.data.immediateChildCount = item.data.geoItems.length;
-            if (item.data.immediateChildCount === 0) item.data.folders.push(item.path.join('/').toLowerCase());
+            if (item.data.immediateChildCount > 0) item.data.folders.push(item.path.join('/').toLowerCase());
 
             // Book-keeping: either our finish-action can be done now, or is done by our final subfolder.
             if (item.remainingSubfolders === 0) {
@@ -321,7 +321,7 @@ export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, 
                     toFetch.unshift(createEndWorkItem(parent));
                 } else {
                     const logpct = (count: number, total: number) => log(parent)(`upload ${Math.floor(count / total * 100)}%`);
-                    await multipartUpload(logpct, cacheFilename(parent.path), data, accessToken);
+                    await multipartUpload(logpct, cacheFilename(parent.path), data);
                     toProcess.unshift({ ...parent, state: 'END', responses: {}, requests: [] });
                 }
             }
@@ -336,11 +336,10 @@ export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, 
             let batchResponse: any = null;
             while (true) {
                 const body = JSON.stringify({ requests });
-                batchResponse = await fetch('https://graph.microsoft.com/v1.0/$batch', {
+                batchResponse = await authFetch('https://graph.microsoft.com/v1.0/$batch', {
                     'method': 'POST',
                     'headers': {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${accessToken}`
                     },
                     'body': body
                 });
@@ -399,7 +398,7 @@ function eastmost(lng1: number, lng2: number): number {
  * (1) a list of up to 20 items in that cluster, (2) the total count of items in that cluster.
  * The tiling is "stable": when the user pans the map, cluster boundaries remain fixed.
  */
-export function asClusters(sw: Position, ne: Position, pixelWidth: number, items: GeoItem[], filter: Filter): [Cluster[], Tally] {
+export function asClusters(sw: Position, ne: Position, pixelWidth: number, geoData: GeoData, filter: Filter): [Cluster[], Tally] {
     const TILE_SIZE_PX = 60;
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
@@ -422,10 +421,15 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, items
         }
     }
 
+    const filterText = filter.text ? filter.text.toLowerCase() : undefined;
+    const filterFolders =
+        filterText === undefined ? new Set<number>() :
+            new Set(geoData.folders.map((f, i) => f.includes(filterText) ? i : -1).filter(i => i !== -1))
+
     const dateCounts: Map<Numdate, OneDayTally> = new Map();
 
     // CARE! Following loop is hot; goal is 50,000 items in 5ms, but we're currently at 10ms
-    for (const item of items) {
+    for (const item of geoData.geoItems) {
         let tally = dateCounts.get(item.date); // PERF: this lookup costs 2ms
         if (!tally) {
             tally = { inBounds: { inFilter: 0, outFilter: 0 }, outBounds: { inFilter: 0, outFilter: 0 } };
@@ -434,7 +438,7 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, items
         const x = Math.floor(((item.position.lng - swSnap.lng + 360) % 360) / tileSize);
         const y = Math.floor((item.position.lat - swSnap.lat) / tileSize);
         const inBounds = (x >= 0 && x < numTilesX && y >= 0 && y < numTilesY);
-        const inFilter = filter.text !== undefined && (item.name.includes(filter.text) || item.tags.some(tag => tag.includes(filter.text as string)));
+        const inFilter = filterText !== undefined && (item.name.includes(filterText) || filterFolders.has(item.folderIndex) || item.tags.some(tag => tag.includes(filterText)));
         const inDateRange = filter.dateRange === undefined || (item.date >= filter.dateRange.start && item.date < filter.dateRange.end);
         tally[inBounds ? 'inBounds' : 'outBounds'][inFilter ? 'inFilter' : 'outFilter']++;
         if (!inBounds) continue;
@@ -449,9 +453,9 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, items
     return [tiles.filter(t => t.somePassFilterItems.length > 0 || t.oneFailFilterItem !== undefined), { dateCounts }];
 }
 
-export function boundsForDateRange(items: GeoItem[], dateRange: { start: Numdate, end: Numdate }): { sw: Position, ne: Position } | undefined {
+export function boundsForDateRange(geoData: GeoData, dateRange: { start: Numdate, end: Numdate }): { sw: Position, ne: Position } | undefined {
     let r: { sw: Position, ne: Position } | undefined = undefined;
-    for (const item of items) {
+    for (const item of geoData.geoItems) {
         const inDateRange = dateRange === undefined || (item.date >= dateRange.start && item.date < dateRange.end);
         if (!inDateRange) continue;
         if (r === undefined) {

@@ -89,13 +89,9 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
-- Implement the histogram + filter UI currently described in test.ts
-- Sort out the thumbnail display. Hopefully use a pool of items, maybe even re-using an existing element if it's still needed?
-- Switch to OAuth2 Code Flow with PKCE (based on the sample in oauth2-notes.txt). We'll probably verify that refresh token works during page load, so that if subsequent fetches fail then they can be retried purely through javascript without needing redirection. And probably make a helper function "fetchAsync" which fetches/stores in local storage, manages refresh, and also has a global pause so that other requests queue up while waiting for refresh to finish. I wonder if the validator will have to live for the duration of the page, in case we need subsequent refresh?
-- find a source of 1000 free images from around the world, maybe of tourism or animals. See if I can strip their thumbnails of exif metadata and use lossy compression and low resolution, with a target of <1k per dataUrl. Maybe from https://commons.wikimedia.org/wiki/Category:Media_with_locations or from https://www.pic2map.com/random.php
-- Change markers in the map to be square. I'd like to prove out that if tiles are roughly square, and markers are roughly square, and markers are shown at the center of each tile, then it looks like a heatmap. Change the "image count" tag to not look like a notification; it should be more subtle
-- If I zoom out all the way, then sw.lng and ne.lng are meaningless since the view wraps. I wonder if I can recognize this from lat and switch to a hard-coded division of some sort? probably using the map's zoom-level.
-- In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.
-- When you click "Sign in to index..." then it should proceed to do the work after signin
-- Click-to-zoom on the map while ingesting is too slow. Should disable click-to-zoom during this phase.
+- Do something to avoid having to go to OneDrive to see photos. Nicest would be if you click a thumbnail, or a singleton icon in the map, then it puts an overlay over the entire page to just show this image. You can click again on the image to dismiss, or click a close button.
+- Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.
+- Use sample.json if user hasn't signed into OneDrive and lacks a localCache
 - Normalize the instruct() text.
+- Ingestion: In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.
+- Ingestion: Click-to-zoom on the map while ingesting is too slow. Should disable click-to-zoom during this phase.
