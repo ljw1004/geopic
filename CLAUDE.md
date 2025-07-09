@@ -89,9 +89,10 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
-- Do something to avoid having to go to OneDrive to see photos. Nicest would be if you click a thumbnail, or a singleton icon in the map, then it puts an overlay over the entire page to just show this image. You can click again on the image to dismiss, or click a close button.
-- Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.
-- Use sample.json if user hasn't signed into OneDrive and lacks a localCache
+- Shouldn't zoom in so much when clicking. Is there a way to set it as maximum zoom level? Or should I adjust the bounds to be a minimum size before clicking on setBounds? Also remove the zoom icon at that point, which I guess means an up-front decision. Also, right-click should zoom out -- I find the scroll-wheel too hard.
 - Normalize the instruct() text.
+- Use the overlay error case also for other system errors that warrant a refresh/reload/logout
 - Ingestion: In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.
 - Ingestion: Click-to-zoom on the map while ingesting is too slow. Should disable click-to-zoom during this phase.
+- Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.
+- Use sample.json if user hasn't signed into OneDrive and lacks a localCache

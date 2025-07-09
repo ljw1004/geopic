@@ -309,7 +309,11 @@ export async function authFetch(url: string, options?: RequestInit): Promise<Res
         options = options ? { ...options } : {};
         options.headers = new Headers(options.headers);
         options.headers.set('Authorization', `Bearer ${accessToken}`);
-        return fetch(url, options);
+        try {
+            return fetch(url, options);
+        } catch (e) {
+            return Promise.resolve(new Response(e instanceof Error ? e.message : String(e), { status: 503, statusText: 'Cannot make request' }));
+        }
     }
 
     const CLIENT_ID = localStorage.getItem('client_id');

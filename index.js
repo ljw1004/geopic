@@ -13,6 +13,7 @@
 import { generateImpl, asClusters, boundsForDateRange } from './geoitem.js';
 import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
+import { Overlay } from './overlay.js';
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
 import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError } from './utils.js';
@@ -40,6 +41,9 @@ localStorage.setItem('client_id', CLIENT_ID);
 let MAP;
 let MARKER_POOL;
 let IMG_POOL;
+let OVERLAY;
+let HISTOGRAM;
+let TEXT_FILTER;
 /**
  * Sets up authentication and UI.
  * - If we have local cache of geoData, we set up map, thumbnails, histogram
@@ -50,8 +54,11 @@ let IMG_POOL;
  */
 export async function onBodyLoad() {
     MAP = document.getElementById("map").innerMap;
-    MARKER_POOL = await MarkerPool.create(MAP);
+    MARKER_POOL = new MarkerPool(MAP, await google.maps.importLibrary("marker"));
     IMG_POOL = new ImgPool(document.getElementById('thumbnails-grid'));
+    OVERLAY = new Overlay();
+    HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
+    TEXT_FILTER = document.getElementById('text-filter');
     // Set up map, thumbnails, histogram
     const localCache = await dbGet();
     if (localCache)
@@ -104,10 +111,77 @@ export async function onBodyLoad() {
     }
     instruct(instructions);
 }
+/**
+ * INTERACTION DESIGN PRINCIPLES
+ *
+ * This model defines the interaction between the map, histogram and text-filter. These are the principles:
+ * 1. All three surfaces (map, histogram, filter-text) are places where the user does filtering work.
+ *    The user's work on the map is pan/zoom to find an area. The work on the histogram is making/adjusting
+ *    a selection (not pan/zoom). The work on the text is typing a search term. They often iterate through
+ *    all three forms of work.
+ * 2. We must never erase a user's work. However, we deem that when the user releases their mouse button
+ *    in the click-drag act of making a histogram selection, then the user has themself erased their map
+ *    work of panning/zooming.
+ * 3. We will strive to "autosuggest" a user's next iteration of filtering work, a way of offering context or suggestions.
+ *    If the user pans/zooms the map, the context/suggestion we make is to pan/zoom the histogram to the smallest
+ *    time range that contains all photos in the map viewport. If the user makes a selection on the histogram,
+ *    the context/suggestion we make is to pan/zoom the map to contain all the photos in the selection.
+ *    However, we don't use the text box as a place to provide context, and we don't offer context/suggestions
+ *    in response to the user typing in the text box, since that's not a reliable enough signal.
+ * 4. The histogram will always offer full context: if the user zooms out far enough, they'll see every photo in
+ *    the database represented in the histogram. It uses color: grey for all photos, but blue if a photo is
+ *    within the current map viewport, and yellow if it matches a filter.
+ * 5. The map will offer only filtered results: it will only show photos that (1) are within map bounds, (2)
+ *    pass the histogram selection filter if any, (3) pass the text filter if any.
+ * 6. We prioritize simplicity and predictability. We avoid creating novel non-standard interactions on the
+ *    map (like drawing a map selection box). We think that selecting in the histogram is familiar, much like
+ *    selecting text in a text editor.
+ * 7. We might choose to have have additional context: "Geopic. 65500 photos (5 visible, 100 hidden)". These
+ *    numbers are already implied by the histogram when fully zoomed out, but might be useful. We'll place
+ *    them for now along with the title at the top left of the page.
+ *
+ * From these principles we derive that there must be two modes!
+ * 1. Map-led exploratory mode. This is defined as whenever the histogram lacks a selection. The user will
+ *    be panning and zooming the map. We will autosuggest by panning/zooming the histogram to encompass all
+ *    items in the map viewport. Data-flow is one-way `map -> histogram`. Note that if the user pans/zooms
+ *    the histogram in this mode, that is considered a temporary inspection rather than work, and will be
+ *    lost next time the user pans/zooms the map. When the user makes a selection, we enter filtering mode.
+ * 2. Filtering mode. This is defined as whenever the histogram has a selection. The user will be adjusting
+ *    the selection and panning/zooming the map. We will autosuggest by automatically panning/zooming the
+ *    map to match the selection, dataflow `histogram -> map`, but we can only do this up until the user's
+ *    first pan/zoom of the map, after which point we can't automatically move it, dataflow `none`. When the
+ *    user deselects their selection, we revert to map-led exploratory mode. We'll introduce one minor nit
+ *    here. You might think that  by reverting to map-led exploratory mode then the histogram should
+ *    automatically pan/zoom to reflect what's in the viewport. But that's not right, because it wouldn't
+ *    be the right opportunity to make an autosuggestion. We'll only make this autosuggestion in response
+ *    to the user's first pan/zoom of the map. This will also feel less jarring.
+ * 3. Changes to the text filter will not influence either form of autosuggestion. That's because while I
+ *    trust that date and geolocation of photos are universal and continuous properties, I think that text
+ *    terms are sparse and discontinuous. When a text filter is cleared, all that does is remove yellow
+ *    highlights from the histogram and show more photos on the map; it doesn't alter the histogram or map.
+ *
+ * USER SCENARIOS
+ *
+ * These scenarios are used to test the robustness of the interaction model. They focus on the user's goal
+ * and mental model, not the implementation.
+ * - Scenario 1: The "Reminiscing" Query.
+ *   - Goal: "We were just talking about our trip to Italy. I want to pull up the photos from that trip to show everyone."
+ *   - User Intent: The user thinks of an event as a whole ("Italy trip"). They want to see all photos associated with it,
+ *     likely starting with a location they remember.
+ * - Scenario 2: The "Specific Moment" Hunt.
+ *   - Goal: "I'm looking for that one photo of the sunset over the Grand Canyon. I think we were there in the fall of 2021."
+ *   - User Intent: The user has a specific image in mind and uses partial information (a famous place, an approximate time)
+ *     to narrow the search.
+ * - Scenario 3: The "Rediscovery" Journey.
+ *   - Goal: "We stopped at a beautiful little town on our drive through the Alps a few years ago, but I can't remember its name.
+ *     I want to trace our route to find it."
+ *   - User Intent: The user's memory is spatial and sequential. They want to follow a path and browse visually to jog their memory.
+ * - Scenario 4: The "Then and Now" Comparison.
+ *   - Goal: "I want to find a photo of our house right after we bought it, and another one from this year to see how the
+ *     garden has changed."
+ *   - User Intent: The user needs to isolate a single location and then pinpoint two distinct moments in time associated with it.
+ */
 async function displayAndManageInteractions(geoData) {
-    const HISTOGRAM = new Histogram(document.getElementById("histogram-container"));
-    const TEXT_FILTER = document.getElementById('text-filter');
-    const MAP = document.getElementById("map").innerMap;
     let userHasMapWork = false;
     let boundsChangedByCode = false;
     let filter = { dateRange: undefined, text: undefined };
@@ -138,6 +212,18 @@ async function displayAndManageInteractions(geoData) {
         const tally = calcTallyAndRenderGeo(geoData, filter);
         HISTOGRAM.setData(tally);
     });
+    OVERLAY.siblingGetter = (id, direction) => {
+        const items = Array.from(document.getElementById('thumbnails-grid').children)
+            .map(img => img instanceof HTMLImageElement ? img.getAttribute('data-id') : null)
+            .filter(id => id !== null);
+        const index = items.indexOf(id);
+        if (index === -1)
+            return undefined;
+        else if (direction === 'prev')
+            return index <= 0 ? undefined : items[index - 1];
+        else
+            return index >= items.length - 1 ? undefined : items[index + 1];
+    };
     TEXT_FILTER.placeholder = 'Filter, e.g. Person or 2024/03';
     const tally = calcTallyAndRenderGeo(geoData, filter);
     HISTOGRAM.setData(tally);
@@ -192,21 +278,23 @@ function calcTallyAndRenderGeo(geoData, filter) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
         const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : filter.text ? 'filter-glow' : '';
         const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
-        const onClick = () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
-        const marker = MARKER_POOL.add(item.thumbnailUrl, imgClassName, spanText, onClick);
+        const onClick = cluster.totalPassFilterItems === 1
+            ? () => OVERLAY.showId(item.id)
+            : () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
+        const marker = MARKER_POOL.add(item.id, item.thumbnailUrl, imgClassName, spanText, onClick);
         marker.position = item.position;
         marker.zIndex = cluster.totalPassFilterItems;
     }
     MARKER_POOL.finishAdding();
-    for (const item of clusters.flatMap(c => c.somePassFilterItems).slice(0, 200)) {
-        const img = IMG_POOL.addImg(item.thumbnailUrl);
-        img.onclick = async () => {
-            const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${item.id}?select=webUrl`);
-            if (!r.ok)
-                throw new FetchError(r, await r.text());
-            const url = (await r.json()).webUrl;
-            window.open(url, 'geopic-image');
-        };
+    const MAX_THUMBNAILS = 400;
+    const wantedCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
+    const fraction = wantedCount > MAX_THUMBNAILS ? MAX_THUMBNAILS / wantedCount : 1;
+    for (const cluster of clusters) {
+        for (const item of cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))) {
+            const img = IMG_POOL.add(item.id, item.thumbnailUrl);
+            img.setAttribute('data-id', item.id);
+            img.onclick = () => OVERLAY.showId(item.id);
+        }
     }
     IMG_POOL.finishAdding();
     return tally;

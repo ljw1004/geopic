@@ -329,6 +329,171 @@
             font-size: 12px;
             text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
         }
+
+        /* Image overlay styles */
+        #overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            /* Heavy grey-out effect */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            /* Above all other elements */
+            cursor: pointer;
+        }
+
+        .overlay-media {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            /* Maintains aspect ratio, no crop/distort */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .overlay-image-controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+            background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .overlay-image-controls.show-initially {
+            opacity: 1;
+            animation: auto-hide 0.3s ease 1s forwards;
+        }
+
+        .overlay-image-controls:hover {
+            opacity: 1 !important;
+            animation: none;
+        }
+
+        .overlay-image-description {
+            color: white;
+            text-align: left;
+            flex-grow: 1;
+            padding-right: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            font-size: 14px;
+        }
+
+        #overlay a {
+            color: #4dabf7;
+            text-decoration: none;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        #overlay a:hover {
+            text-decoration: underline;
+        }
+
+        .overlay-image-fullscreen-icon {
+            width: 48px;
+            height: 48px;
+            font-size: 24px;
+            color: rgba(255, 255, 255, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: transform 0.2s ease;
+        }
+
+        .overlay-image-fullscreen-icon:hover {
+            transform: scale(1.1);
+        }
+
+        .overlay-nav {
+            position: absolute;
+            top: 25%;
+            bottom: 25%;
+            width: 80px;
+            z-index: 9998;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .overlay-nav.left {
+            left: 0;
+        }
+
+        .overlay-nav.right {
+            right: 0;
+        }
+
+        .overlay-nav:hover .overlay-nav-icon {
+            opacity: 1;
+        }
+
+        .overlay-nav-icon {
+            font-size: 24px;
+            color: rgba(255, 255, 255, 0.3);
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .overlay-nav-icon.enabled {
+            color: white;
+            background-color: rgba(0, 0, 0, 0.6);
+        }
+
+        @keyframes auto-hide {
+            to {
+                opacity: 0;
+            }
+        }
+
+        .overlay-error {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .overlay-error-icon {
+            font-size: 96px;
+            margin-bottom: 20px;
+        }
+
+        .overlay-error-text {
+            color: white;
+            font-size: 16px;
+            max-width: 40em;
+        }
+
+        .overlay-spinner {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-width: 4px;
+        }
     </style>
 </head>
 
@@ -388,6 +553,26 @@
 
     <div id="map-container">
         <gmp-map id="map" center="37.422,-122.0840" zoom="4" map-id="5d7eeda627cfbcf67ae37695"></gmp-map>
+    </div>
+
+    <div id="overlay" style="display: none;">
+        <div class="spinner overlay-spinner"></div>
+        <div class="overlay-error">
+            <div class="overlay-error-icon">&#x1F916;</div>
+            <div class="overlay-error-text"></div>
+        </div>
+        <div class="overlay-nav left">
+            <div class="overlay-nav-icon left">&#x25C0;</div>
+        </div>
+        <div class="overlay-nav right">
+            <div class="overlay-nav-icon right">&#x25B6;</div>
+        </div>
+        <img class="overlay-media" />
+        <video class="overlay-media" controls autoplay style="display: none;"></video>
+        <div class="overlay-image-controls">
+            <div class="overlay-image-description"></div>
+            <div class="overlay-image-fullscreen-icon">&#x26F6;</div>
+        </div>
     </div>
 </body>
 
