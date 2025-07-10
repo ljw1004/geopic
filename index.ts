@@ -263,20 +263,21 @@ async function installHandlers(): Promise<void> {
 
 function instruct(mode: 'generating' | 'fresh' | 'stale' | undefined): void {
     let instructions: string;
+    const title = '<h1><a href="https://github.com/ljw1004/geopic/blob/main/README.md">Geopic</a></h1> ';
     const sample = g_geoData && g_geoData.id === 'sample-data' ? '<br/><b>Showing sample data for now.</b>' : '';
     if (mode === 'generating') {
-        instructions = `<span class="spinner"></span> Ingesting photos...<br/>`
+        instructions = `${title} Ingesting photos <span class="spinner"></span><br/>`
             + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
             + `You can reload this page and it will pick up where it left off. `
             + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
     } else if (mode === 'fresh') {
-        instructions = `Geopic. ${g_geoData?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
+        instructions = `${title} ${g_geoData?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
     } else if (mode === 'stale') {
-        instructions = `Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
+        instructions = `${title} <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     } else if (localStorage.getItem('access_token')) {
-        instructions = `<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
+        instructions = `${title} <span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     } else {
-        instructions = `<span id="login">Login to OneDrive to index your photos...</span>${sample}`;
+        instructions = `${title} <span id="login">Login to OneDrive to index your photos...</span>${sample}`;
     }
 
     // instructions += '<br/><span id="clear">Clear cache...</span>';
