@@ -108,8 +108,9 @@ export class Overlay {
         if (mode !== 'image')
             this.img.removeAttribute('src');
         if (mode !== 'video') {
-            this.video.pause();
             this.video.removeAttribute('src');
+            this.video.pause();
+            this.video.load();
         }
     }
     /**

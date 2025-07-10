@@ -225,6 +225,10 @@ async function displayAndManageInteractions(geoData) {
             return index >= items.length - 1 ? undefined : items[index + 1];
     };
     TEXT_FILTER.placeholder = 'Filter, e.g. Person or 2024/03';
+    MAP.addListener('rightclick', () => {
+        const currentZoom = MAP.getZoom() || 1;
+        MAP.setZoom(Math.max(1, currentZoom - 3));
+    });
     const tally = calcTallyAndRenderGeo(geoData, filter);
     HISTOGRAM.setData(tally);
 }
@@ -273,22 +277,30 @@ function calcTallyAndRenderGeo(geoData, filter) {
     const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoData, filter);
+    const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
+    const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
         const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : filter.text ? 'filter-glow' : '';
         const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
-        const onClick = cluster.totalPassFilterItems === 1
-            ? () => OVERLAY.showId(item.id)
-            : () => MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
+        const isUsefulToZoom = (MAP.getZoom() || 100) < 17 || clusters.length > 10
+            || totalPassFilterCount - cluster.totalPassFilterItems > 10 || cluster.totalPassFilterItems > 10;
+        const onClick = () => {
+            if (cluster.totalPassFilterItems === 1)
+                OVERLAY.showId(item.id);
+            else if (isUsefulToZoom)
+                MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
+            else
+                MAP.setCenter(cluster.center);
+        };
         const marker = MARKER_POOL.add(item.id, item.thumbnailUrl, imgClassName, spanText, onClick);
         marker.position = item.position;
         marker.zIndex = cluster.totalPassFilterItems;
     }
     MARKER_POOL.finishAdding();
     const MAX_THUMBNAILS = 400;
-    const wantedCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
-    const fraction = wantedCount > MAX_THUMBNAILS ? MAX_THUMBNAILS / wantedCount : 1;
+    const fraction = somePassFilterCount > MAX_THUMBNAILS ? MAX_THUMBNAILS / somePassFilterCount : 1;
     for (const cluster of clusters) {
         for (const item of cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))) {
             const img = IMG_POOL.add(item.id, item.thumbnailUrl);

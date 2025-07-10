@@ -6,37 +6,33 @@
  * Under the hood it's optimized to avoid dynamic allocation of markers or DOM elements.
  *
  * How to use: any time the caller wants to refresh all markers on the map,
- * it calls addMarker() for each one, then finishAddingMarkers() when done.
- * (Implicitly, the first addMarker() after finishAddingMarkers() implies
+ * it calls add() for each one, then finishAdding() when done.
+ * (Implicitly, the first add() after finishAdding() implies
  * a fresh batch of markers).
  *
  * Pooling strategy... It's easier to think of this procedurally. Think of a
- * steady 'finished' state where we store a list of markers, some of which are on
+ * steady state 'finished' where we store a list of markers, some of which are used on
  * the map and some of which are unused. Then our refresh procedure starts, so all
- * the ones which used to be on the map are set aside in a "potential for immediate
- * reuse" area. One by one our refresh procedure adds markers to the map, either
+ * the ones which used to be on the map are set aside in a "wasUsed / potential for
+ * immediate reuse" area. One by one our refresh procedure adds (uses) markers to the map, either
  * taking them from this immediate-reuse pool if they're an exact match, or taking
  * them from the unused pool, or creating entirely new ones if none are available.
  * At the end of the refresh procedure, everything left in this immediate-reuse pool
  * gets moved into the unused pool, and our steady state has been restored.
  *
- * The refresh procedure start is implicit in the first call to addMarker() after
- * the previous finishAddingMarkers(). The refresh proceceure end happens when
- * we call finishAddingMarkers(). If finishAddingMarkers() was called without
- * any preceding addMarkers(), then that means the refresh procedure started and
+ * The refresh procedure start is implicit in the first call to add() after
+ * the previous finishAdding(). The refresh procedure end happens when
+ * we call finishAdding(). If finishAdding() was called without
+ * any preceding add(), then that means the refresh procedure started and
  * finished with no markers. (This is to support the case where no markers are wanted!)
  */
 export class MarkerPool {
-    MARKER_LIBRARY;
     MAP;
+    MARKER_LIBRARY;
     state;
-    static async create(map) {
-        const markerLibrary = await google.maps.importLibrary("marker");
-        return new MarkerPool(markerLibrary, map);
-    }
-    constructor(MARKER_LIBRARY, MAP) {
-        this.MARKER_LIBRARY = MARKER_LIBRARY;
+    constructor(MAP, MARKER_LIBRARY) {
         this.MAP = MAP;
+        this.MARKER_LIBRARY = MARKER_LIBRARY;
         this.state = {
             kind: 'finished',
             used: { img: new Map(), span: new Map() },
@@ -59,34 +55,29 @@ export class MarkerPool {
      * depending on whether spanText was passed. The img will have the specified
      * src and imgClassName (use empty string for none). The marker will have a click listener
      * if specified. The caller is expected to .setPosition() and .setZIndex() as needed.
+     * Invariant: you don't try to add with the same id twice in the same refresh procedure.
      */
-    add(src, imgClassName, spanText, onClick) {
+    add(id, src, imgClassName, spanText, onClick) {
         this.state = MarkerPool.startAddingIfNeeded(this.state);
         // The following code has several branches. They all establish some invariants:
         // - marker is defined
         // - marker.map === this.MAP
         // - marker.content is either <img/> or <div><img/><span/></div> according to spanText
         // Step 1. Attempt to reuse from immediate-reuse pool with exact matching src
-        const key = spanText === undefined ? 'img' : 'span';
-        let markerAndListener = this.state.used[key].get(src);
+        const kind = spanText === undefined ? 'img' : 'span';
+        let markerAndListener = this.state.wasUsed[kind].get(id);
         if (markerAndListener) {
-            // A marker was previously added with the exact same src.
-            // We don't support this, so we'll give them back the existing marker
-            return markerAndListener.marker;
-        }
-        markerAndListener = this.state.wasUsed[key].get(src);
-        if (markerAndListener) {
-            this.state.wasUsed[key].delete(src);
+            this.state.wasUsed[kind].delete(id);
             // assuming invariant that forImmediateReuse has map=container
             // assuming invariant that forImmediateReuse[key] has correct content type
         }
         else {
             // Step 2. Failing that, pick the oldest marker from the unused pool (even with different src)
-            const firstEntry = this.state.unused[key].entries().next();
+            const firstEntry = this.state.unused[kind].entries().next();
             if (!firstEntry.done) {
-                const oldSrc = firstEntry.value[0];
+                const oldId = firstEntry.value[0];
                 markerAndListener = firstEntry.value[1];
-                this.state.unused[key].delete(oldSrc);
+                this.state.unused[kind].delete(oldId);
                 markerAndListener.marker.map = this.MAP; // because unused has map=null
                 // assuming invariant that unused[key] has correct content type
             }
@@ -94,7 +85,7 @@ export class MarkerPool {
                 const img = document.createElement('img');
                 img.loading = 'lazy';
                 let content;
-                if (key === 'img') {
+                if (kind === 'img') {
                     content = img;
                 }
                 else {
@@ -129,7 +120,7 @@ export class MarkerPool {
             img.className = imgClassName;
         const listener = onClick ? marker.addListener('click', onClick) : undefined;
         // Final book-keeping. We've established all the invariants described in Markers type.
-        this.state.used[key].set(src, { marker, listener });
+        this.state.used[kind].set(id, { marker, listener });
         return marker;
     }
     /**
@@ -142,12 +133,12 @@ export class MarkerPool {
         const { used: onMap, wasUsed: forImmediateReuse, unused } = MarkerPool.startAddingIfNeeded(this.state);
         // Any remaining markers in immediate-reuse pool are moved to unused-pool
         // We're modifying by reference the same 'unused' that we got by destructuring earlier.
-        for (const key of ['img', 'span']) {
-            for (const [src, { marker, listener }] of forImmediateReuse[key]) {
+        for (const kind of ['img', 'span']) {
+            for (const [id, { marker, listener }] of forImmediateReuse[kind]) {
                 marker.map = null; // establish the invariant for unused, that map=null
                 listener?.remove(); // establish the invariant for unused, that listener is undefined
                 // other invariants (about content-type and key) carry over
-                unused[key].set(src, { marker, listener: undefined });
+                unused[kind].set(id, { marker, listener: undefined });
             }
         }
         this.state = { kind: 'finished', used: onMap, unused };
@@ -156,8 +147,7 @@ export class MarkerPool {
 /**
  * This class is a factory for img elements that belong to a div.
  * It's basically the same as MarkerPool: see comments there.
- * The difference between used and unused elements is their
- * display style, either 'none' or '' (default)
+ * The difference between used and unused elements is whether they're children of 'parent'
  */
 export class ImgPool {
     parent;
@@ -180,41 +170,37 @@ export class ImgPool {
             unused: state.unused,
         };
     }
-    addImg(src) {
+    add(id, src) {
         this.state = ImgPool.startAddingIfNeeded(this.state);
-        let img = this.state.used.get(src);
-        if (img)
-            return img; // already there
-        img = this.state.wasUsed.get(src);
+        let img = this.state.wasUsed.get(id);
         if (img) {
-            this.state.wasUsed.delete(src);
+            this.state.wasUsed.delete(id);
         }
         else {
             const firstEntry = this.state.unused.entries().next();
             if (!firstEntry.done) {
-                const oldSrc = firstEntry.value[0];
+                const oldId = firstEntry.value[0];
                 img = firstEntry.value[1];
-                if (img.src !== src)
-                    img.src = src;
-                this.state.unused.delete(oldSrc);
+                this.state.unused.delete(oldId);
                 this.parent.appendChild(img);
             }
             else {
                 img = document.createElement('img');
                 img.loading = 'lazy';
-                img.src = src;
                 this.parent.appendChild(img);
             }
         }
-        this.state.used.set(src, img);
+        if (img.src !== src)
+            img.src = src;
+        this.state.used.set(id, img);
         return img;
     }
     finishAdding() {
         const { used, wasUsed, unused } = ImgPool.startAddingIfNeeded(this.state);
-        for (const [src, img] of wasUsed) {
+        for (const [id, img] of wasUsed) {
             img.remove();
             img.onclick = null;
-            unused.set(src, img);
+            unused.set(id, img);
         }
         this.state = { kind: 'finished', used, unused };
     }

@@ -402,8 +402,11 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, geoDa
     const TILE_SIZE_PX = 60;
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
+    console.log(tileSize);
     const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: lngWrap((Math.floor(sw.lng / tileSize) * tileSize)) };
-    const numTilesX = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
+    const numTilesX1 = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
+    const numTilesX2 = Math.ceil(((ne.lng - sw.lng + 360) % 360) / tileSize);
+    const numTilesX = Math.max(numTilesX1, numTilesX2); // because when fully zoomed out, swSnap.lng can become east of ne.lng!
     const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
     const tiles: Cluster[] = [];
     for (let y = 0; y < numTilesY; y++) {

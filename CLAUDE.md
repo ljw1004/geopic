@@ -89,7 +89,6 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
-- Shouldn't zoom in so much when clicking. Is there a way to set it as maximum zoom level? Or should I adjust the bounds to be a minimum size before clicking on setBounds? Also remove the zoom icon at that point, which I guess means an up-front decision. Also, right-click should zoom out -- I find the scroll-wheel too hard.
 - Normalize the instruct() text.
 - Use the overlay error case also for other system errors that warrant a refresh/reload/logout
 - Ingestion: In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.

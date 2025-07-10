@@ -111,7 +111,7 @@ export class Overlay {
         this.imageControls.style.display = mode === 'image' ? 'flex' : 'none';
         this.imageControls.classList.toggle('show-initially', mode === 'image');
         if (mode !== 'image') this.img.removeAttribute('src');
-        if (mode !== 'video') { this.video.pause(); this.video.removeAttribute('src'); }
+        if (mode !== 'video') { this.video.removeAttribute('src'); this.video.pause(); this.video.load(); }
     }
 
     /**
