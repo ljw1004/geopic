@@ -11,7 +11,7 @@
 
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, GeoData, asClusters, GeoItem, boundsForDateRange, Filter, Tally } from './geoitem.js';
+import { generateImpl, GeoData, asClusters, GeoItem, boundsForDateRange, Filter } from './geoitem.js';
 import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
 import { Overlay } from './overlay.js';
@@ -50,10 +50,13 @@ let HISTOGRAM: Histogram;
 let TEXT_FILTER: HTMLInputElement;
 
 // The items that histogram/map should work off. This is typically a copy of the local cache,
-// but during photo ingestion it's different. Is undefined if there's no local cache and
-// ingestion hasn't yet started.
-let GEODATA: GeoData | undefined;
+// set only once during onLoad. But during photo ingestion it gets updated through the
+// course of ingestion. It's undefined if there's no local cache and ingestion hasn't start.
+let g_geoData: GeoData | undefined;
 
+// This is the filter that's implied by the current filter controls. It gets updated
+// in response to user actions, by installHandlers. It gets read by showCurrentGeodata.
+let g_filter: Filter = { dateRange: undefined, text: undefined };
 
 /**
  * Sets up authentication and UI.
@@ -72,9 +75,9 @@ export async function onBodyLoad(): Promise<void> {
     TEXT_FILTER = document.getElementById('text-filter') as HTMLInputElement;
 
     // Set up map, thumbnails, histogram
-    GEODATA = await dbGet<GeoData>();
-    showOrHideControls();
-    await displayAndManageInteractions();
+    g_geoData = await dbGet<GeoData>();
+    await installHandlers();
+    showCurrentGeodata();
 
     // Dispatch ?code=... param from OAuth2 redirect
     const code = new URLSearchParams(new URL(location.href).search).get('code');
@@ -100,24 +103,21 @@ export async function onBodyLoad(): Promise<void> {
     document.getElementById('instructions')!.innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
     try { if (r.ok) photosDriveItem = await r.json(); } catch { }
-    const status = photosDriveItem && GEODATA ? (GEODATA.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
+    const status = photosDriveItem && g_geoData ? (g_geoData.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
     instruct(status);
 
-    if (!localStorage.getItem('access_token') && !GEODATA) {
+    if (!localStorage.getItem('access_token') && !g_geoData) {
         const r = await myFetch('sample.json');
         if (r.ok) {
-            GEODATA = await r.json();
-            dbPut(GEODATA);
-            showOrHideControls();
+            g_geoData = await r.json();
+            dbPut(g_geoData);
+            showCurrentGeodata();
         } else {
             console.error(r.text());
         }
     }
 }
 
-function showOrHideControls(): void {
-    TEXT_FILTER.style.display = GEODATA ? 'inline-block' : 'none';
-}
 
 /**
  * INTERACTION DESIGN PRINCIPLES
@@ -189,42 +189,45 @@ function showOrHideControls(): void {
  *     garden has changed."
  *   - User Intent: The user needs to isolate a single location and then pinpoint two distinct moments in time associated with it.
  */
-async function displayAndManageInteractions(): Promise<void> {
+async function installHandlers(): Promise<void> {
     let userHasMapWork = false;
     let boundsChangedByCode = false;
-    let filter: Filter = { dateRange: undefined, text: undefined };
 
     MAP.addListener('bounds_changed', () => {
-        if (!GEODATA) return;
-        if (!boundsChangedByCode) userHasMapWork = Boolean(filter.dateRange);
-        const tally = calcTallyAndRenderGeo(filter);
-        HISTOGRAM.setData(tally);
+        if (!g_geoData) return;
+        if (!boundsChangedByCode) userHasMapWork = Boolean(g_filter.dateRange);
+        showCurrentGeodata();
     });
 
     MAP.addListener('idle', () => boundsChangedByCode = false);
 
     HISTOGRAM.onSelectionChange = (selection) => {
-        if (!GEODATA) return;
-        filter.dateRange = selection;
-        if (filter.dateRange && !userHasMapWork) {
-            const newBounds = boundsForDateRange(GEODATA, filter.dateRange);
+        if (!g_geoData) return;
+        g_filter.dateRange = selection;
+        if (g_filter.dateRange && !userHasMapWork) {
+            const newBounds = boundsForDateRange(g_geoData, g_filter.dateRange);
             if (newBounds) {
                 boundsChangedByCode = true;
                 MAP.fitBounds(new google.maps.LatLngBounds(newBounds.sw, newBounds.ne));
                 return;
             }
         }
-        const tally = calcTallyAndRenderGeo(filter);
-        HISTOGRAM.setData(tally);
+        showCurrentGeodata();
     };
 
     TEXT_FILTER.addEventListener('input', () => {
-        if (!GEODATA) return;
+        if (!g_geoData) return;
         const text = TEXT_FILTER.value.trim().toLowerCase();
-        filter.text = text ? text : undefined;
+        g_filter.text = text ? text : undefined;
         TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
-        const tally = calcTallyAndRenderGeo(filter);
-        HISTOGRAM.setData(tally);
+        showCurrentGeodata();
+    });
+
+    TEXT_FILTER.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && TEXT_FILTER.value) {
+            TEXT_FILTER.value = '';
+            TEXT_FILTER.dispatchEvent(new Event('input'));
+        }
     });
 
     OVERLAY.siblingGetter = (id, direction) => {
@@ -243,10 +246,6 @@ async function displayAndManageInteractions(): Promise<void> {
         const currentZoom = MAP.getZoom() || 1;
         MAP.setZoom(Math.max(1, currentZoom - 3));
     });
-
-    if (!GEODATA) return;
-    const tally = calcTallyAndRenderGeo(filter);
-    HISTOGRAM.setData(tally);
 }
 
 
@@ -258,12 +257,12 @@ function instruct(mode: 'generating' | 'fresh' | 'stale' | undefined): void {
             + `You can reload this page and it will pick up where it left off. `
             + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
     } else if (mode === 'fresh') {
-        instructions = `Geopic. ${GEODATA?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
+        instructions = `Geopic. ${g_geoData?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
     } else if (mode === 'stale') {
         instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>';
     } else if (localStorage.getItem('access_token')) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>';
-    } else if (GEODATA && GEODATA.id !== 'sample-data') {
+    } else if (g_geoData && g_geoData.id !== 'sample-data') {
         instructions = `<span id="login">Login to OneDrive to look for updates...</span>`;
     } else {
         instructions = `<span id="login">Login to OneDrive to index your photos...</span><br/>Showing sampla data instead.`;
@@ -308,32 +307,39 @@ export async function onLoginClick(): Promise<void> {
 /**
  * Handles the logout button click event.
  */
-export function onLogoutClick(): void {
+export async function onLogoutClick(): Promise<void> {
+    await dbPut(null);
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
 
-function calcTallyAndRenderGeo(filter: Filter): Tally {
-    if (!GEODATA) return { dateCounts: new Map() };
+/**
+ * Called whenever histogram/thumbnails/markers need to be updated, during onBodyLoad() or in response
+ * to user actions from installHandlers(). It applies g_filter to g_geoData, figures out what geoItems
+ * should be shown on the three surfaces, and shows them!
+ */
+function showCurrentGeodata(): void {
+    TEXT_FILTER.style.display = g_geoData ? 'inline-block' : 'none';
+    if (!g_geoData) return;
 
     const bounds = MAP.getBounds()!;
     const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
-    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, GEODATA, filter);
+    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, g_geoData, g_filter);
 
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
 
     function showItem(item: GeoItem): void {
-        if (GEODATA?.id === 'sample-data') OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h1>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h1> ${escapeHtml(item.name)}`);
+        if (g_geoData?.id === 'sample-data') OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h1>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h1> ${escapeHtml(item.name)}`);
         else OVERLAY.showId(item.id);
     }
 
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems)
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem!;
-        const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : filter.text ? 'filter-glow' : '';
+        const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : g_filter.text ? 'filter-glow' : '';
         const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
         const isUsefulToZoom = (MAP.getZoom() || 100) < 17 || clusters.length > 10
             || totalPassFilterCount - cluster.totalPassFilterItems > 10 || cluster.totalPassFilterItems > 10;
@@ -360,7 +366,7 @@ function calcTallyAndRenderGeo(filter: Filter): Tally {
     }
     IMG_POOL.finishAdding();
 
-    return tally;
+    HISTOGRAM.setData(tally);
 }
 
 
@@ -379,7 +385,7 @@ export async function onGenerateClick(): Promise<void> {
         return;
     }
 
-    GEODATA = {
+    g_geoData = {
         schemaVersion: 0,
         id: '',
         size: 0,
@@ -394,18 +400,18 @@ export async function onGenerateClick(): Promise<void> {
     function progress(update: string[] | GeoItem[]): void {
         if (update.length === 0) return;
         if (typeof update[0] === 'string') {
-            document.getElementById('progress')!.textContent = [`${GEODATA!.geoItems.length} photos so far`, ...update].join('\n');
+            document.getElementById('progress')!.textContent = [`${g_geoData!.geoItems.length} photos so far`, ...update].join('\n');
         } else {
-            GEODATA!.geoItems.push(...update as GeoItem[]);
-            calcTallyAndRenderGeo({ dateRange: undefined, text: undefined });
+            g_geoData!.geoItems.push(...update as GeoItem[]);
+            showCurrentGeodata();
         }
     }
 
     const photosDriveItem = await r.json();
     try {
-        GEODATA = await generateImpl(progress, photosDriveItem);
-        await dbPut(GEODATA);
-        showOrHideControls();
+        g_geoData = await generateImpl(progress, photosDriveItem);
+        await dbPut(g_geoData);
+        showCurrentGeodata();
         instruct('fresh');
     } catch (e) {
         instruct(undefined);
