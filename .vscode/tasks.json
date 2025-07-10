@@ -20,7 +20,7 @@
 		{
 			"label": "deploy to https://unto.me/geopic",
 			"type": "shell",
-			"command": "rsync --recursive --times --compress --progress --delete ./ lu@unto.me:/mnt/disks/pod7disk/www/untome/geopic --exclude='eslint.config.js' --include='*.js' --include='*.js.map' --include='*.ts' --include='*.html' --include='sample.json' --exclude='*'",
+			"command": "rsync --recursive --times --compress --progress --delete ./ lu@unto.me:/mnt/disks/pod7disk/www/untome/geopic --exclude='eslint.config.js' --include='*.js' --include='*.js.map' --include='*.ts' --include='*.html' --include='sample.json' --include='*.jpg' --include='*.png' --exclude='*'",
 			"presentation": {
 				"reveal": "always",
 				"panel": "shared"

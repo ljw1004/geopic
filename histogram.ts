@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
+
 import { Numdate, OneDayTally, Tally } from "./geoitem";
 
 

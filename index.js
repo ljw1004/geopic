@@ -1,4 +1,7 @@
 /**
+ * Copyright (c) Lucian Wischik
+ */
+/**
  * This single-page html+js app combines your OneDrive photos with an embedded Google Map.
  * Each photo with known latitude and longitude is shown as a "AdvancedMarkerElement" on the google map,
  * and it uses google's MarkerClusterer to group them together if there are too many.
@@ -60,6 +63,9 @@ let g_filter = { dateRange: undefined, text: undefined };
  * - We display instructions based on login and staleness.
  */
 export async function onBodyLoad() {
+    const code = new URLSearchParams(new URL(location.href).search).get('code');
+    if (code)
+        window.history.replaceState(null, '', window.location.pathname);
     MAP = document.getElementById("map").innerMap;
     MARKER_POOL = new MarkerPool(MAP, await google.maps.importLibrary("marker"));
     IMG_POOL = new ImgPool(document.getElementById('thumbnails-grid'));
@@ -70,8 +76,7 @@ export async function onBodyLoad() {
     g_geoData = await dbGet();
     await installHandlers();
     showCurrentGeodata();
-    // Dispatch ?code=... param from OAuth2 redirect
-    const code = new URLSearchParams(new URL(location.href).search).get('code');
+    // Process OAuth code if present
     if (code) {
         const code_verifier = sessionStorage.getItem('code_verifier');
         sessionStorage.removeItem('code_verifier');
@@ -83,7 +88,6 @@ export async function onBodyLoad() {
             localStorage.setItem('access_token', r.accessToken);
             localStorage.setItem('refresh_token', r.refreshToken);
         }
-        window.history.replaceState(null, '', window.location.pathname);
     }
     // Attempt to get Pictures metadata (so validating access token) and validate local cache. Outcomes:
     // - (!accessToken, !geoData, !status) -- user is signed out, no geo data

@@ -1,4 +1,6 @@
-
+/**
+ * Copyright (c) Lucian Wischik
+ */
 
 /**
  * INVARIANTS:

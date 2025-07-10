@@ -1,3 +1,6 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /**
  * Converts a number in YYYYMMDD format to a Date object.

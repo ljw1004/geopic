@@ -31,7 +31,11 @@
       "Bash(echo:*)",
       "Bash(cp:*)",
       "Bash(open https://unto.me/geopic)",
-      "WebFetch(domain:support.google.com)"
+      "WebFetch(domain:support.google.com)",
+      "Bash(for file in *.ts)",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(head:*)",
+      "Bash(done)"
     ],
     "deny": []
   }

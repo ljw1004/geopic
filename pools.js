@@ -1,4 +1,7 @@
 /**
+ * Copyright (c) Lucian Wischik
+ */
+/**
  * This class is a factory for image markers that belong to a google map,
  * specifically for the case where the caller needs to refresh the entire
  * list of markers on the map in one go. Each marker contains either

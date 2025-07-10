@@ -1,3 +1,6 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
 import { FetchError, authFetch, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 const SCHEMA_VERSION = 5;
 ;

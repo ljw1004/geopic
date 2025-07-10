@@ -1,4 +1,5 @@
-// Tests+prototypes go here!
-// WE WILL LEAVE THIS FILE IN PLACE. IT SHOULD NOT BE REMOVED.
+/**
+ * Copyright (c) Lucian Wischik
+ */
 export {};
 //# sourceMappingURL=test.js.map

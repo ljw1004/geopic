@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
+
 export class FetchError extends Error {
     response: Response;
     constructor(response: Response, text: string) {

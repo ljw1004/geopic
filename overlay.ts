@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
+
 import { authFetch, escapeHtml } from './utils.js';
 
 /**

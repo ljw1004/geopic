@@ -1,3 +1,6 @@
+/**
+ * Copyright (c) Lucian Wischik
+ */
 import { authFetch, escapeHtml } from './utils.js';
 /**
  * Manages a full-page photo/video/error overlay
