@@ -2,7 +2,7 @@
  * Copyright (c) Lucian Wischik
  */
 
-import { Numdate, OneDayTally, Tally } from "./geoitem";
+import { dateToNum, Numdate, numToDate, OneDayTally, Tally } from "./geoitem.js";
 
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -18,26 +18,6 @@ type HistogramBarInfo = {
     find: (bar: number) => Numdate; // finds the start date for the bar (also works for out of range bars)
     count: number; // number of bars in the histogram
     snap: (date: Numdate) => Numdate; // snaps a date to the sentinel date for its bar
-}
-
-/**
- * Converts a number in YYYYMMDD format to a Date object.
- */
-function numToDate(yyyymmdd: number): Date {
-    const year = Math.floor(yyyymmdd / 10000);
-    const month = Math.floor((yyyymmdd % 10000) / 100) - 1; // Month is 1-indexed in YYYYMMDD, but 0-indexed in Date
-    const day = yyyymmdd % 100;
-    return new Date(Date.UTC(year, month, day));
-}
-
-/**
- * Converts Date object to a number in YYYYMMDD format
- */
-function dateToNum(date: Date): Numdate {
-    const year = date.getUTCFullYear();
-    const month = date.getUTCMonth() + 1; // Month is 0-indexed in Date, but 1-indexed in YYYYMMDD
-    const day = date.getUTCDate();
-    return year * 10000 + month * 100 + day;
 }
 
 /**

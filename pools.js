@@ -150,7 +150,8 @@ export class MarkerPool {
 /**
  * This class is a factory for img elements that belong to a div.
  * It's basically the same as MarkerPool: see comments there.
- * The difference between used and unused elements is whether they're children of 'parent'
+ * The difference between used and unused elements is whether they're children of 'parent'.
+ * Also, used items are children of 'parent' in the order they were add()ed.
  */
 export class ImgPool {
     parent;
@@ -185,16 +186,15 @@ export class ImgPool {
                 const oldId = firstEntry.value[0];
                 img = firstEntry.value[1];
                 this.state.unused.delete(oldId);
-                this.parent.appendChild(img);
             }
             else {
                 img = document.createElement('img');
                 img.loading = 'lazy';
-                this.parent.appendChild(img);
             }
         }
         if (img.src !== src)
             img.src = src;
+        this.parent.appendChild(img);
         this.state.used.set(id, img);
         return img;
     }

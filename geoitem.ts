@@ -81,6 +81,25 @@ export type Tally = {
  */
 export type OneDayTally = { [bounds in 'inBounds' | 'outBounds']: { [filter in 'inFilter' | 'outFilter']: number } };
 
+/**
+ * Converts a number in YYYYMMDD format to a Date object.
+ */
+export function numToDate(yyyymmdd: number): Date {
+    const year = Math.floor(yyyymmdd / 10000);
+    const month = Math.floor((yyyymmdd % 10000) / 100) - 1; // Month is 1-indexed in YYYYMMDD, but 0-indexed in Date
+    const day = yyyymmdd % 100;
+    return new Date(Date.UTC(year, month, day));
+}
+
+/**
+ * Converts Date object to a number in YYYYMMDD format
+ */
+export function dateToNum(date: Date): Numdate {
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1; // Month is 0-indexed in Date, but 1-indexed in YYYYMMDD
+    const day = date.getUTCDate();
+    return year * 10000 + month * 100 + day;
+}
 
 /**
  * For creating an index of GeoItems and CacheData, we use "Workitems":

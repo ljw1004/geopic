@@ -15,7 +15,7 @@
 
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, GeoData, asClusters, GeoItem, boundsForDateRange, Filter } from './geoitem.js';
+import { generateImpl, GeoData, asClusters, GeoItem, boundsForDateRange, Filter, numToDate } from './geoitem.js';
 import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
 import { Overlay } from './overlay.js';
@@ -362,12 +362,12 @@ function showCurrentGeodata(): void {
 
     const MAX_THUMBNAILS = 400;
     const fraction = somePassFilterCount > MAX_THUMBNAILS ? MAX_THUMBNAILS / somePassFilterCount : 1;
-    for (const cluster of clusters) {
-        for (const item of cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))) {
-            const img = IMG_POOL.add(item.id, item.thumbnailUrl);
-            img.setAttribute('data-id', item.id);
-            img.onclick = () => showItem(item);
-        }
+    const thumbnails = clusters.flatMap(cluster => cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))).sort((a, b) => a.date - b.date);
+    for (const item of thumbnails) {
+        const img = IMG_POOL.add(item.id, item.thumbnailUrl);
+        img.title = `${numToDate(item.date).toLocaleDateString()} - ${escapeHtml(item.name)}`;
+        img.setAttribute('data-id', item.id);
+        img.onclick = () => showItem(item);
     }
     IMG_POOL.finishAdding();
 
@@ -425,6 +425,3 @@ export async function onGenerateClick(): Promise<void> {
         return;
     }
 }
-
-
-
