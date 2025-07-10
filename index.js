@@ -63,8 +63,10 @@ let g_filter = { dateRange: undefined, text: undefined };
  * - We display instructions based on login and staleness.
  */
 export async function onBodyLoad() {
-    const code = new URLSearchParams(new URL(location.href).search).get('code');
-    if (code)
+    const params = new URLSearchParams(new URL(location.href).search);
+    const code = params.get('code');
+    const state = params.get('state');
+    if (code || state)
         window.history.replaceState(null, '', window.location.pathname);
     MAP = document.getElementById("map").innerMap;
     MARKER_POOL = new MarkerPool(MAP, await google.maps.importLibrary("marker"));
@@ -74,6 +76,8 @@ export async function onBodyLoad() {
     TEXT_FILTER = document.getElementById('text-filter');
     // Set up map, thumbnails, histogram
     g_geoData = await dbGet();
+    if (g_geoData && g_geoData.id === 'sample-data' && localStorage.getItem('access_token'))
+        g_geoData = undefined;
     await installHandlers();
     showCurrentGeodata();
     // Process OAuth code if present
@@ -104,7 +108,12 @@ export async function onBodyLoad() {
     catch { }
     const status = photosDriveItem && g_geoData ? (g_geoData.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
     instruct(status);
-    if (!localStorage.getItem('access_token') && !g_geoData) {
+    // Initial action
+    const accessToken = localStorage.getItem('access_token');
+    if (accessToken && state === 'generate') {
+        onGenerateClick();
+    }
+    else if (!accessToken && !g_geoData) {
         const r = await myFetch('sample.json');
         if (r.ok) {
             g_geoData = await r.json();
@@ -292,7 +301,8 @@ export async function onLoginClick() {
         redirect_uri: window.location.origin + window.location.pathname,
         scope: 'files.readwrite offline_access',
         code_challenge,
-        code_challenge_method: 'S256'
+        code_challenge_method: 'S256',
+        state: 'generate'
     });
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
 }
@@ -315,6 +325,8 @@ function showCurrentGeodata() {
     if (!g_geoData)
         return;
     const bounds = MAP.getBounds();
+    if (!bounds)
+        return;
     const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, g_geoData, g_filter);
