@@ -18,7 +18,7 @@ import { Overlay } from './overlay.js';
 
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError } from './utils.js';
+import { authFetch, dbGet, dbPut, exchangeCodeForToken, FetchError } from './utils.js';
 
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS: CODE FLOW WITH PKCE
@@ -49,6 +49,11 @@ let OVERLAY: Overlay;
 let HISTOGRAM: Histogram;
 let TEXT_FILTER: HTMLInputElement;
 
+// The items that histogram/map should work off. This is typically a copy of the local cache,
+// but during photo ingestion it's different. Is undefined if there's no local cache and
+// ingestion hasn't yet started.
+let GEODATA: GeoData | undefined; 
+
 
 /**
  * Sets up authentication and UI.
@@ -66,10 +71,10 @@ export async function onBodyLoad(): Promise<void> {
     HISTOGRAM = new Histogram(document.getElementById("histogram-container")!);
     TEXT_FILTER = document.getElementById('text-filter') as HTMLInputElement;
 
-
     // Set up map, thumbnails, histogram
-    const localCache = await dbGet<GeoData>();
-    if (localCache) await displayAndManageInteractions(localCache);
+    GEODATA = await dbGet<GeoData>();
+    showOrHideControls();
+    await displayAndManageInteractions();
 
     // Dispatch ?code=... param from OAuth2 redirect
     const code = new URLSearchParams(new URL(location.href).search).get('code');
@@ -96,23 +101,14 @@ export async function onBodyLoad(): Promise<void> {
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
     try { if (r.ok) photosDriveItem = await r.json(); } catch { }
 
-    const status = photosDriveItem && localCache ? (localCache.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
+    const status = photosDriveItem && GEODATA ? (GEODATA.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
 
     // Update UI elements
-    let instructions = 'Geopic';
-    if (status === 'fresh') {
-        instructions = `Geopic. ${localCache?.geoItems.length} photos <span title="logout" id="logout">⏏</span>`;
-    } else if (status === 'stale') {
-        instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">⏏</span>';
-    } else if (localStorage.getItem('access_token')) {
-        instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">⏏</span>';
-    } else if (localCache) {
-        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
-    } else {
-        instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
-    }
-    instruct(instructions);
+    instruct(status);
+}
 
+function showOrHideControls(): void {
+    TEXT_FILTER.style.display = GEODATA ? 'inline-block' : 'none';
 }
 
 /**
@@ -185,38 +181,41 @@ export async function onBodyLoad(): Promise<void> {
  *     garden has changed."
  *   - User Intent: The user needs to isolate a single location and then pinpoint two distinct moments in time associated with it.
  */
-async function displayAndManageInteractions(geoData: GeoData): Promise<void> {
+async function displayAndManageInteractions(): Promise<void> {
     let userHasMapWork = false;
     let boundsChangedByCode = false;
     let filter: Filter = { dateRange: undefined, text: undefined };
 
     MAP.addListener('bounds_changed', () => {
+        if (!GEODATA) return;
         if (!boundsChangedByCode) userHasMapWork = Boolean(filter.dateRange);
-        const tally = calcTallyAndRenderGeo(geoData, filter);
+        const tally = calcTallyAndRenderGeo(GEODATA, filter);
         HISTOGRAM.setData(tally);
     });
 
     MAP.addListener('idle', () => boundsChangedByCode = false);
 
     HISTOGRAM.onSelectionChange = (selection) => {
+        if (!GEODATA) return;
         filter.dateRange = selection;
         if (filter.dateRange && !userHasMapWork) {
-            const newBounds = boundsForDateRange(geoData, filter.dateRange);
+            const newBounds = boundsForDateRange(GEODATA, filter.dateRange);
             if (newBounds) {
                 boundsChangedByCode = true;
                 MAP.fitBounds(new google.maps.LatLngBounds(newBounds.sw, newBounds.ne));
                 return;
             }
         }
-        const tally = calcTallyAndRenderGeo(geoData, filter);
+        const tally = calcTallyAndRenderGeo(GEODATA, filter);
         HISTOGRAM.setData(tally);
     };
 
     TEXT_FILTER.addEventListener('input', () => {
+        if (!GEODATA) return;
         const text = TEXT_FILTER.value.trim().toLowerCase();
         filter.text = text ? text : undefined;
         TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
-        const tally = calcTallyAndRenderGeo(geoData, filter);
+        const tally = calcTallyAndRenderGeo(GEODATA, filter);
         HISTOGRAM.setData(tally);
     });
 
@@ -237,13 +236,32 @@ async function displayAndManageInteractions(geoData: GeoData): Promise<void> {
         MAP.setZoom(Math.max(1, currentZoom - 3));
     });
 
-    const tally = calcTallyAndRenderGeo(geoData, filter);
+    if (!GEODATA) return;
+    const tally = calcTallyAndRenderGeo(GEODATA, filter);
     HISTOGRAM.setData(tally);
 }
 
 
-function instruct(instructions: string): void {
-    instructions += '<br/><span id="clear">Clear cache...</span>';
+function instruct(mode: 'generating' | 'fresh' | 'stale' | undefined): void {
+    let instructions: string;
+    if (mode === 'generating') {
+        instructions = `<span class="spinner"></span> Ingesting photos...<br/>`
+        + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
+        + `You can reload this page and it will pick up where it left off. `
+        + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
+    } else if (mode === 'fresh') {
+        instructions = `Geopic. ${GEODATA?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
+    } else if (mode === 'stale') {
+        instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>';
+    } else if (localStorage.getItem('access_token')) {
+        instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>';
+    } else if (GEODATA) {
+        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
+    } else {
+        instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
+    }
+
+    // instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions')!.innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
@@ -336,16 +354,16 @@ function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
  * and uploads the resulting geo.json file, and updates the link.
  */
 export async function onGenerateClick(): Promise<void> {
-    instruct(`<span class="spinner"></span> Ingesting photos...<br/>A full index takes ~30mins for 100,000 photos on a good network; incremental updates will finish in just seconds. If you reload this page, it will pick up where it left off. <pre id="progress">[...preparing bulk indexer...]</pre>`);
+    instruct('generating');
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos');
     if (!r.ok) {
+        instruct(undefined);
         const reason = await r.text();
-        console.error(reason);
-        instruct(`Error! Try <span id="logout">logging out</span> and then try again.<pre>${escapeHtml(reason)}</pre>`);
+        OVERLAY.showError('Error! Try logging out \u23CF then trying again', reason);
         return;
     }
 
-    const temporaryGeoData: GeoData = {
+    GEODATA = {
         schemaVersion: 0,
         id: '',
         size: 0,
@@ -360,17 +378,25 @@ export async function onGenerateClick(): Promise<void> {
     function progress(update: string[] | GeoItem[]): void {
         if (update.length === 0) return;
         if (typeof update[0] === 'string') {
-            document.getElementById('progress')!.textContent = [`${temporaryGeoData.geoItems.length} photos so far`, ...update].join('\n');
+            document.getElementById('progress')!.textContent = [`${GEODATA!.geoItems.length} photos so far`, ...update].join('\n');
         } else {
-            temporaryGeoData.geoItems.push(...update as GeoItem[]);
-            calcTallyAndRenderGeo(temporaryGeoData, { dateRange: undefined, text: undefined });
+            GEODATA!.geoItems.push(...update as GeoItem[]);
+            calcTallyAndRenderGeo(GEODATA!, { dateRange: undefined, text: undefined });
         }
     }
 
     const photosDriveItem = await r.json();
-    const geoData = await generateImpl(progress, photosDriveItem);
-    await dbPut(geoData);
-    instruct('Geopic <span title="logout" id="logout">⏏</span>');
+    try {
+        GEODATA = await generateImpl(progress, photosDriveItem);
+        await dbPut(GEODATA);
+        showOrHideControls();
+        instruct('fresh');
+    } catch (e) {
+        instruct(undefined);
+        const reason = e instanceof Error ? e.message : String(e);
+        OVERLAY.showError('Error! Try refreshing the page and trying again', reason);
+        return;
+    }
 }
 
 

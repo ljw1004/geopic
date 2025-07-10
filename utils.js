@@ -32,7 +32,7 @@ export async function postprocessBatchResponse(response) {
     const promises = [];
     for (const r of response.responses) {
         if (r.status === 302) { // redirect
-            promises.push(fetch(r["headers"]["Location"]).then(async (rr) => {
+            promises.push(myFetch(r["headers"]["Location"]).then(async (rr) => {
                 r.headers = {};
                 rr.headers.forEach((value, key) => r.headers[key] = value);
                 r.status = rr.status;
@@ -66,6 +66,25 @@ export function formatDuration(seconds) {
     }
 }
 /**
+ * Turns an exception into a Response. Helpful if you're invoking fetch()
+ * and you want to have just a single common error handler, both for errors
+ * that came from the server and for errors that came from the attempted fetch.
+ */
+export function errorResponse(e) {
+    return new Response(e instanceof Error ? e.message : String(e), { status: 503, statusText: 'Cannot make request' });
+}
+/**
+ * Like fetch(), but failures that throw exceptions are also reported as Response errors.
+ */
+export async function myFetch(url, options) {
+    try {
+        return fetch(url, options);
+    }
+    catch (e) {
+        return errorResponse(e);
+    }
+}
+/**
  * This fetches blobs from the given URLs. It retries upon "429 too busy", but all other result codes are returned to caller.
  * The result is either a Blob or a non-429 FetchError for each item, in the order they were provided.
  */
@@ -91,9 +110,8 @@ export async function rateLimitedBlobFetch(f, urls) {
             if (i === undefined)
                 break;
             await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
-            fetches.set(i, fetch(urls[i][0]).
-                then(async (r) => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })).
-                catch(e => e));
+            fetches.set(i, myFetch(urls[i][0]).
+                then(async (r) => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })));
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
         const { i, r } = await Promise.any(fetches.values());
@@ -223,7 +241,7 @@ export async function multipartUpload(log, name, data) {
     const uploadUrl = (await r.json()).uploadUrl;
     for (let start = 0; start < bytes.length; start += CHUNK_SIZE) {
         const end = Math.min(start + CHUNK_SIZE, bytes.length); // exclusive
-        const r = await fetch(uploadUrl, {
+        const r = await myFetch(uploadUrl, {
             method: 'PUT',
             headers: {
                 'Content-Length': String(end - start),
@@ -255,7 +273,7 @@ export async function exchangeCodeForToken(CLIENT_ID, code, code_verifier) {
         redirect_uri: window.location.origin + window.location.pathname,
         grant_type: 'authorization_code'
     });
-    const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    const response = await myFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
@@ -303,12 +321,7 @@ export async function authFetch(url, options) {
         options = options ? { ...options } : {};
         options.headers = new Headers(options.headers);
         options.headers.set('Authorization', `Bearer ${accessToken}`);
-        try {
-            return fetch(url, options);
-        }
-        catch (e) {
-            return Promise.resolve(new Response(e instanceof Error ? e.message : String(e), { status: 503, statusText: 'Cannot make request' }));
-        }
+        return myFetch(url, options);
     }
     const CLIENT_ID = localStorage.getItem('client_id');
     if (!CLIENT_ID)
@@ -329,7 +342,7 @@ export async function authFetch(url, options) {
         const refreshToken = localStorage.getItem('refresh_token');
         if (!refreshToken)
             return Promise.resolve(new Response('Unauthorized: no refresh_token', { status: 401, statusText: 'Unauthorized' }));
-        const r = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+        const r = await myFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -351,7 +364,7 @@ export async function authFetch(url, options) {
         localStorage.setItem('refresh_token', tokenData.refresh_token);
     }
     catch (e) {
-        return new Response(e instanceof Error ? e.message : String(e), { status: 503, statusText: 'Service Unavailable' });
+        return errorResponse(e);
     }
     finally {
         AUTH_REFRESH_SIGNAL.signal();

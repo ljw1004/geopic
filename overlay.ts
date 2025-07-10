@@ -45,10 +45,8 @@ export class Overlay {
         this.navLeftIcon = this.overlay.querySelector('.overlay-nav-icon.left')!;
         this.navRightIcon = this.overlay.querySelector('.overlay-nav-icon.right')!;
 
-        // Close overlay
-        this.overlay.onclick = () => this.dismiss();
-
-        // Prevent clicks on controls from closing overlay
+        // Prevent clicks on error text and controls from closing overlay
+        this.errorText.onclick = (e) => e.stopPropagation();
         this.imageControls.onclick = (e) => e.stopPropagation();
         this.imageDescription.onclick = (e) => {
             // Allow clicks on links to work, but still prevent overlay dismissal
@@ -74,8 +72,11 @@ export class Overlay {
             navigate('next');
         };
 
-        // Prevent clicks on error area from closing overlay
-        this.errorDiv.onclick = (e) => e.stopPropagation();
+        // Clicks on error area should close overlay
+        this.overlay.onclick = () => this.dismiss();
+
+        // Prevent clicks on the error text from closing the overlay
+        this.errorText.onclick = (e) => e.stopPropagation();
 
         // Fullscreen
         this.imageFullscreen.onclick = (e) => {

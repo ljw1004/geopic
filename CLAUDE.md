@@ -89,9 +89,5 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
-- Normalize the instruct() text.
-- Use the overlay error case also for other system errors that warrant a refresh/reload/logout
-- Ingestion: In postProcessBatchResults(), if we got a redirect fetch which failed, then it crashes with an unhandled promise failure. Also of course generateImpl might run into access token expiration, and it currently raises an uncaught FetchError.
-- Ingestion: Click-to-zoom on the map while ingesting is too slow. Should disable click-to-zoom during this phase.
-- Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.
 - Use sample.json if user hasn't signed into OneDrive and lacks a localCache
+- Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.

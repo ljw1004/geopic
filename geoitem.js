@@ -131,6 +131,12 @@ export async function generateImpl(progress, photosDriveItem) {
                 toProcess.unshift(item);
                 continue;
             }
+            if (childrenResult.body.error) {
+                throw new Error(`${childrenResult.status} - ${JSON.stringify(childrenResult.body.error)}`);
+            }
+            if (cacheResult.body.error) {
+                throw new Error(`${cacheResult.status} - ${JSON.stringify(cacheResult.body.error)}`);
+            }
             if (cacheResult.status === 200 && cacheResult.body.size === item.data.size && cacheResult.body.schemaVersion === SCHEMA_VERSION) {
                 stats.bytesFromCache += item.data.size;
                 toProcess.unshift({ ...item, data: cacheResult.body, state: 'END', requests: [], responses: {} });
