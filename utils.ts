@@ -4,8 +4,8 @@
 
 export class FetchError extends Error {
     response: Response;
-    constructor(response: Response, text: string) {
-        super(`HTTP ${response.status} ${response.statusText}: ${text}`);
+    constructor(url: string, response: Response, text: string) {
+        super(`HTTP ${response.status} ${response.statusText} - ${url} - ${text}`);
         this.response = response;
         (Error as any).captureStackTrace(this, FetchError);
     }
@@ -120,7 +120,7 @@ export async function rateLimitedBlobFetch<T>(f: (count: number, total: number, 
             if (i === undefined) break;
             await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
             fetches.set(i, myFetch(urls[i][0]).
-                then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(r, await r.text()) })));
+                then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(`${urls[i][0]}[rateLimitedBlob]`, r, await r.text()) })));
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
         const { i, r } = await Promise.any(fetches.values());
@@ -230,7 +230,8 @@ export async function multipartUpload(log: (count: number, total: number) => voi
     const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB chunks (must be multiple of 320 KiB, which this is)
     const bytes = new TextEncoder().encode(data);
 
-    const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/special/approot:/${name}:/createUploadSession`, {
+    const url = `https://graph.microsoft.com/v1.0/me/drive/special/approot:/${name}:/createUploadSession`
+    const r = await authFetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -241,7 +242,7 @@ export async function multipartUpload(log: (count: number, total: number) => voi
             }
         })
     });
-    if (!r.ok) throw new FetchError(r, await r.text());
+    if (!r.ok) throw new FetchError(`${url}[multipartUpload.create]`, r, await r.text());
     log(0, bytes.length);
 
     const uploadUrl = (await r.json()).uploadUrl;
@@ -255,7 +256,7 @@ export async function multipartUpload(log: (count: number, total: number) => voi
             },
             body: bytes.slice(start, end)
         });
-        if (!r.ok) throw new FetchError(r, await r.text());
+        if (!r.ok) throw new FetchError(`${uploadUrl}[multipartUpload.upload#${start / CHUNK_SIZE}]`, r, await r.text());
         log(end, bytes.length);
     }
 }
@@ -280,14 +281,15 @@ export async function exchangeCodeForToken(CLIENT_ID: string, code: string, code
         redirect_uri: window.location.origin + window.location.pathname,
         grant_type: 'authorization_code'
     });
-    const response = await myFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    const url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+    const response = await myFetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
         },
         body: params.toString()
     });
-    if (!response.ok) return new FetchError(response, await response.text());
+    if (!response.ok) return new FetchError(`${url}[exchangeCodeForToken]`, response, await response.text());
 
     const tokenData = await response.json();
     return { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token };

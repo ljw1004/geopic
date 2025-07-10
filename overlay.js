@@ -129,7 +129,8 @@ export class Overlay {
      */
     showError(messageHtml, detailsText) {
         this.setVisibility('error');
-        this.errorText.innerHTML = messageHtml + (detailsText ? `<br/><br/>${escapeHtml(detailsText)}` : '');
+        const detailsHtml = detailsText ? `<br/><br/>${detailsText.split(' - ').map(escapeHtml).join('<br/>')}` : '';
+        this.errorText.innerHTML = messageHtml + detailsHtml;
     }
     /**
      * Shows the overlay with the specified driveItem id.

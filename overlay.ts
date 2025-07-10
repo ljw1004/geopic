@@ -132,7 +132,8 @@ export class Overlay {
      */
     public showError(messageHtml: string, detailsText: string | undefined): void {
         this.setVisibility('error');
-        this.errorText.innerHTML = messageHtml + (detailsText ? `<br/><br/>${escapeHtml(detailsText)}` : '');
+        const detailsHtml = detailsText ? `<br/><br/>${detailsText.split(' - ').map(escapeHtml).join('<br/>')}` : '';
+        this.errorText.innerHTML = messageHtml + detailsHtml;
     }
 
     /**

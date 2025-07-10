@@ -245,6 +245,7 @@ async function installHandlers() {
 }
 function instruct(mode) {
     let instructions;
+    const sample = g_geoData && g_geoData.id === 'sample-data' ? '<br/><b>Showing sample data for now.</b>' : '';
     if (mode === 'generating') {
         instructions = `<span class="spinner"></span> Ingesting photos...<br/>`
             + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
@@ -255,16 +256,13 @@ function instruct(mode) {
         instructions = `Geopic. ${g_geoData?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
     }
     else if (mode === 'stale') {
-        instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>';
+        instructions = `Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     }
     else if (localStorage.getItem('access_token')) {
-        instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>';
-    }
-    else if (g_geoData && g_geoData.id !== 'sample-data') {
-        instructions = `<span id="login">Login to OneDrive to look for updates...</span>`;
+        instructions = `<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     }
     else {
-        instructions = `<span id="login">Login to OneDrive to index your photos...</span><br/>Showing sampla data instead.`;
+        instructions = `<span id="login">Login to OneDrive to index your photos...</span>${sample}`;
     }
     // instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
@@ -405,8 +403,15 @@ export async function onGenerateClick() {
     }
     catch (e) {
         instruct(undefined);
-        const reason = e instanceof Error ? e.message : String(e);
-        OVERLAY.showError('Error! Try refreshing the page and trying again', reason);
+        let details = String(e);
+        if (e instanceof Error) {
+            const lines = e.stack?.split('\n') || [];
+            if (lines.length > 0 && lines[0].includes(e.message))
+                lines.shift();
+            const stack = lines.length > 0 ? ` -  - ` + lines.join(' - ') : '';
+            details = `${e.message}${stack}`;
+        }
+        OVERLAY.showError('Error! Try refreshing the page and trying again', details);
         return;
     }
 }

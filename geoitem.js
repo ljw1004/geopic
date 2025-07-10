@@ -153,10 +153,7 @@ export async function generateImpl(progress, photosDriveItem) {
                 continue;
             }
             if (childrenResult.body.error) {
-                throw new Error(`${childrenResult.status} - ${JSON.stringify(childrenResult.body.error)}`);
-            }
-            if (cacheResult.body.error) {
-                throw new Error(`${cacheResult.status} - ${JSON.stringify(cacheResult.body.error)}`);
+                throw new FetchError(`${childrenResult.request.url}[child]`, new Response(childrenResult.body, { status: childrenResult.status }), JSON.stringify(childrenResult.body));
             }
             if (cacheResult.status === 200 && cacheResult.body.size === item.data.size && cacheResult.body.schemaVersion === SCHEMA_VERSION) {
                 stats.bytesFromCache += item.data.size;
@@ -245,9 +242,10 @@ export async function generateImpl(progress, photosDriveItem) {
                 thisFetch.push(item);
             }
             let batchResponse = null;
+            const url = 'https://graph.microsoft.com/v1.0/$batch';
             while (true) {
                 const body = JSON.stringify({ requests });
-                batchResponse = await authFetch('https://graph.microsoft.com/v1.0/$batch', {
+                batchResponse = await authFetch(url, {
                     'method': 'POST',
                     'headers': {
                         'Content-Type': 'application/json',
@@ -259,11 +257,13 @@ export async function generateImpl(progress, photosDriveItem) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
             if (!batchResponse.ok)
-                throw new FetchError(batchResponse, await batchResponse.text());
+                throw new FetchError(`${url}[POST:batch(${requests.length})]`, batchResponse, await batchResponse.text());
             const batchResult = await batchResponse.json();
             await postprocessBatchResponse(batchResult);
             for (const r of await batchResult.responses) {
                 const item = thisFetch.find(item => item.requests.some(req => req.id === r.id));
+                const requests = item.requests.find(req => req.id === r.id);
+                r.request = requests;
                 item.responses[r.id] = r;
             }
             thisFetch.forEach(item => item.requests = []);
