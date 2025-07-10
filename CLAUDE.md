@@ -89,5 +89,4 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
-- Use sample.json if user hasn't signed into OneDrive and lacks a localCache
 - Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.

@@ -18,7 +18,7 @@ import { Overlay } from './overlay.js';
 
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import { authFetch, dbGet, dbPut, exchangeCodeForToken, FetchError } from './utils.js';
+import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, myFetch } from './utils.js';
 
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS: CODE FLOW WITH PKCE
@@ -52,7 +52,7 @@ let TEXT_FILTER: HTMLInputElement;
 // The items that histogram/map should work off. This is typically a copy of the local cache,
 // but during photo ingestion it's different. Is undefined if there's no local cache and
 // ingestion hasn't yet started.
-let GEODATA: GeoData | undefined; 
+let GEODATA: GeoData | undefined;
 
 
 /**
@@ -100,11 +100,19 @@ export async function onBodyLoad(): Promise<void> {
     document.getElementById('instructions')!.innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
     try { if (r.ok) photosDriveItem = await r.json(); } catch { }
-
     const status = photosDriveItem && GEODATA ? (GEODATA.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
-
-    // Update UI elements
     instruct(status);
+
+    if (!localStorage.getItem('access_token') && !GEODATA) {
+        const r = await myFetch('sample.json');
+        if (r.ok) {
+            GEODATA = await r.json();
+            dbPut(GEODATA);
+            showOrHideControls();
+        } else {
+            console.error(r.text());
+        }
+    }
 }
 
 function showOrHideControls(): void {
@@ -189,7 +197,7 @@ async function displayAndManageInteractions(): Promise<void> {
     MAP.addListener('bounds_changed', () => {
         if (!GEODATA) return;
         if (!boundsChangedByCode) userHasMapWork = Boolean(filter.dateRange);
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     });
 
@@ -206,7 +214,7 @@ async function displayAndManageInteractions(): Promise<void> {
                 return;
             }
         }
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     };
 
@@ -215,7 +223,7 @@ async function displayAndManageInteractions(): Promise<void> {
         const text = TEXT_FILTER.value.trim().toLowerCase();
         filter.text = text ? text : undefined;
         TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     });
 
@@ -237,7 +245,7 @@ async function displayAndManageInteractions(): Promise<void> {
     });
 
     if (!GEODATA) return;
-    const tally = calcTallyAndRenderGeo(GEODATA, filter);
+    const tally = calcTallyAndRenderGeo(filter);
     HISTOGRAM.setData(tally);
 }
 
@@ -246,19 +254,19 @@ function instruct(mode: 'generating' | 'fresh' | 'stale' | undefined): void {
     let instructions: string;
     if (mode === 'generating') {
         instructions = `<span class="spinner"></span> Ingesting photos...<br/>`
-        + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
-        + `You can reload this page and it will pick up where it left off. `
-        + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
+            + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
+            + `You can reload this page and it will pick up where it left off. `
+            + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
     } else if (mode === 'fresh') {
         instructions = `Geopic. ${GEODATA?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
     } else if (mode === 'stale') {
         instructions = 'Geopic. <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>';
     } else if (localStorage.getItem('access_token')) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>';
-    } else if (GEODATA) {
-        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
+    } else if (GEODATA && GEODATA.id !== 'sample-data') {
+        instructions = `<span id="login">Login to OneDrive to look for updates...</span>`;
     } else {
-        instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
+        instructions = `<span id="login">Login to OneDrive to index your photos...</span><br/>Showing sampla data instead.`;
     }
 
     // instructions += '<br/><span id="clear">Clear cache...</span>';
@@ -302,17 +310,25 @@ export async function onLoginClick(): Promise<void> {
  */
 export function onLogoutClick(): void {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
 
-function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
+function calcTallyAndRenderGeo(filter: Filter): Tally {
+    if (!GEODATA) return { dateCounts: new Map() };
+
     const bounds = MAP.getBounds()!;
     const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
-    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoData, filter);
+    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, GEODATA, filter);
 
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
+
+    function showItem(item: GeoItem): void {
+        if (GEODATA?.id === 'sample-data') OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h1>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h1> ${escapeHtml(item.name)}`);
+        else OVERLAY.showId(item.id);
+    }
 
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems)
     for (const cluster of clusters) {
@@ -322,7 +338,7 @@ function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
         const isUsefulToZoom = (MAP.getZoom() || 100) < 17 || clusters.length > 10
             || totalPassFilterCount - cluster.totalPassFilterItems > 10 || cluster.totalPassFilterItems > 10;
         const onClick = () => {
-            if (cluster.totalPassFilterItems === 1) OVERLAY.showId(item.id);
+            if (cluster.totalPassFilterItems === 1) showItem(item);
             else if (isUsefulToZoom) MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
             else MAP.setCenter(cluster.center);
         };
@@ -339,7 +355,7 @@ function calcTallyAndRenderGeo(geoData: GeoData, filter: Filter): Tally {
         for (const item of cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))) {
             const img = IMG_POOL.add(item.id, item.thumbnailUrl);
             img.setAttribute('data-id', item.id);
-            img.onclick = () => OVERLAY.showId(item.id);
+            img.onclick = () => showItem(item);
         }
     }
     IMG_POOL.finishAdding();
@@ -381,7 +397,7 @@ export async function onGenerateClick(): Promise<void> {
             document.getElementById('progress')!.textContent = [`${GEODATA!.geoItems.length} photos so far`, ...update].join('\n');
         } else {
             GEODATA!.geoItems.push(...update as GeoItem[]);
-            calcTallyAndRenderGeo(GEODATA!, { dateRange: undefined, text: undefined });
+            calcTallyAndRenderGeo({ dateRange: undefined, text: undefined });
         }
     }
 

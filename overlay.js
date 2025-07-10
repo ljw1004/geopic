@@ -16,7 +16,7 @@ import { authFetch, escapeHtml } from './utils.js';
  * - Navigation buttons are disabled appropriately based on getSibling callback results
  */
 export class Overlay {
-    siblingGetter = () => undefined;
+    siblingGetter = undefined;
     currentId;
     overlay;
     img;
@@ -114,6 +114,13 @@ export class Overlay {
             this.video.load();
         }
     }
+    setIdAndUpdateNav(id, allowNav = true) {
+        this.currentId = id;
+        const prevId = this.siblingGetter && id ? this.siblingGetter(id, 'prev') : undefined;
+        const nextId = this.siblingGetter && id ? this.siblingGetter(id, 'next') : undefined;
+        this.navLeftIcon.classList.toggle('enabled', Boolean(prevId) && allowNav);
+        this.navRightIcon.classList.toggle('enabled', Boolean(nextId) && allowNav);
+    }
     /**
      * Shows an error icon with message.
      */
@@ -126,7 +133,7 @@ export class Overlay {
      * Spinner is shown at start, until video/image is loaded or error is displayed
      */
     async showId(id) {
-        this.currentId = id;
+        this.setIdAndUpdateNav(id);
         this.setVisibility('spinner');
         const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${id}?expand=tags,thumbnails`);
         if (!r.ok) {
@@ -138,10 +145,6 @@ export class Overlay {
             this.showError('Unable to retrieve from OneDrive', 'missing thumbnails');
             return;
         }
-        const prevId = this.siblingGetter ? this.siblingGetter(id, 'prev') : undefined;
-        const nextId = this.siblingGetter ? this.siblingGetter(id, 'next') : undefined;
-        this.navLeftIcon.classList.toggle('enabled', Boolean(prevId));
-        this.navRightIcon.classList.toggle('enabled', Boolean(nextId));
         const onError = (e) => {
             this.showError(`Unable to show image.<br/><a href="${driveItem.webUrl}" target="geo-pic-image">Open in OneDrive</a>`, e instanceof ErrorEvent ? e.message : typeof e === 'string' ? e : undefined);
         };
@@ -151,7 +154,7 @@ export class Overlay {
             this.video.src = driveItem['@microsoft.graph.downloadUrl'];
         }
         else {
-            const tagList = (driveItem.tags || []).map((t) => t.name);
+            const tagList = (driveItem.tags || []).map((t) => t.name).map(escapeHtml);
             const tags = tagList.length > 0 ? `<br/>[${tagList.join(', ')}]` : '';
             const date = new Date(driveItem.lastModifiedDateTime).toLocaleDateString();
             this.imageDescription.innerHTML = `${date} &bull; ${driveItem.name}${tags}<br/><a href="${driveItem.webUrl}" target="geopic-image">Click to open full image in OneDrive</a>`;
@@ -160,11 +163,20 @@ export class Overlay {
             this.img.src = driveItem.thumbnails[0].large.url;
         }
     }
+    /**
+     * This is an alternative to showId, for when we have a dataUrl that can be shown immediately
+     */
+    showDataUrl(id, url, descriptionHtml) {
+        this.setIdAndUpdateNav(id, false);
+        this.setVisibility('image');
+        this.imageDescription.innerHTML = descriptionHtml;
+        this.img.src = url;
+    }
     dismiss() {
         if (document.fullscreenElement)
             document.exitFullscreen();
         this.setVisibility('dismissed');
-        this.currentId = undefined;
+        this.setIdAndUpdateNav(undefined);
     }
 }
 //# sourceMappingURL=overlay.js.map

@@ -16,7 +16,7 @@ import { ImgPool, MarkerPool } from './pools.js';
 import { Overlay } from './overlay.js';
 // The markerClusterer library is loaded from CDN, as window.marketClusterer.
 // The following workaround is to give it strong typing.
-import { authFetch, dbGet, dbPut, exchangeCodeForToken, FetchError } from './utils.js';
+import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, myFetch } from './utils.js';
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS: CODE FLOW WITH PKCE
  * 1. The user navigates to "index.html" and we offer a login button, which they click.
@@ -96,8 +96,18 @@ export async function onBodyLoad() {
     }
     catch { }
     const status = photosDriveItem && GEODATA ? (GEODATA.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
-    // Update UI elements
     instruct(status);
+    if (!localStorage.getItem('access_token') && !GEODATA) {
+        const r = await myFetch('sample.json');
+        if (r.ok) {
+            GEODATA = await r.json();
+            dbPut(GEODATA);
+            showOrHideControls();
+        }
+        else {
+            console.error(r.text());
+        }
+    }
 }
 function showOrHideControls() {
     TEXT_FILTER.style.display = GEODATA ? 'inline-block' : 'none';
@@ -181,7 +191,7 @@ async function displayAndManageInteractions() {
             return;
         if (!boundsChangedByCode)
             userHasMapWork = Boolean(filter.dateRange);
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     });
     MAP.addListener('idle', () => boundsChangedByCode = false);
@@ -197,7 +207,7 @@ async function displayAndManageInteractions() {
                 return;
             }
         }
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     };
     TEXT_FILTER.addEventListener('input', () => {
@@ -206,7 +216,7 @@ async function displayAndManageInteractions() {
         const text = TEXT_FILTER.value.trim().toLowerCase();
         filter.text = text ? text : undefined;
         TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
-        const tally = calcTallyAndRenderGeo(GEODATA, filter);
+        const tally = calcTallyAndRenderGeo(filter);
         HISTOGRAM.setData(tally);
     });
     OVERLAY.siblingGetter = (id, direction) => {
@@ -228,7 +238,7 @@ async function displayAndManageInteractions() {
     });
     if (!GEODATA)
         return;
-    const tally = calcTallyAndRenderGeo(GEODATA, filter);
+    const tally = calcTallyAndRenderGeo(filter);
     HISTOGRAM.setData(tally);
 }
 function instruct(mode) {
@@ -248,11 +258,11 @@ function instruct(mode) {
     else if (localStorage.getItem('access_token')) {
         instructions = '<span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>';
     }
-    else if (GEODATA) {
-        instructions = '<span id="login">Login to OneDrive to look for updates...</span>';
+    else if (GEODATA && GEODATA.id !== 'sample-data') {
+        instructions = `<span id="login">Login to OneDrive to look for updates...</span>`;
     }
     else {
-        instructions = '<span id="login">Login to OneDrive to index your photos...</span>';
+        instructions = `<span id="login">Login to OneDrive to index your photos...</span><br/>Showing sampla data instead.`;
     }
     // instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
@@ -291,15 +301,24 @@ export async function onLoginClick() {
  */
 export function onLogoutClick() {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${location.href}`;
 }
-function calcTallyAndRenderGeo(geoData, filter) {
+function calcTallyAndRenderGeo(filter) {
+    if (!GEODATA)
+        return { dateCounts: new Map() };
     const bounds = MAP.getBounds();
     const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
     const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
-    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, geoData, filter);
+    const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, GEODATA, filter);
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
+    function showItem(item) {
+        if (GEODATA?.id === 'sample-data')
+            OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h1>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h1> ${escapeHtml(item.name)}`);
+        else
+            OVERLAY.showId(item.id);
+    }
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
@@ -309,7 +328,7 @@ function calcTallyAndRenderGeo(geoData, filter) {
             || totalPassFilterCount - cluster.totalPassFilterItems > 10 || cluster.totalPassFilterItems > 10;
         const onClick = () => {
             if (cluster.totalPassFilterItems === 1)
-                OVERLAY.showId(item.id);
+                showItem(item);
             else if (isUsefulToZoom)
                 MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
             else
@@ -326,7 +345,7 @@ function calcTallyAndRenderGeo(geoData, filter) {
         for (const item of cluster.somePassFilterItems.slice(0, Math.ceil(cluster.somePassFilterItems.length * fraction))) {
             const img = IMG_POOL.add(item.id, item.thumbnailUrl);
             img.setAttribute('data-id', item.id);
-            img.onclick = () => OVERLAY.showId(item.id);
+            img.onclick = () => showItem(item);
         }
     }
     IMG_POOL.finishAdding();
@@ -365,7 +384,7 @@ export async function onGenerateClick() {
         }
         else {
             GEODATA.geoItems.push(...update);
-            calcTallyAndRenderGeo(GEODATA, { dateRange: undefined, text: undefined });
+            calcTallyAndRenderGeo({ dateRange: undefined, text: undefined });
         }
     }
     const photosDriveItem = await r.json();

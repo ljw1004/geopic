@@ -17,7 +17,7 @@ import { authFetch, escapeHtml } from './utils.js';
  * - Navigation buttons are disabled appropriately based on getSibling callback results
  */
 export class Overlay {
-    public siblingGetter: (id: string, direction: 'prev' | 'next') => string | undefined = () => undefined;
+    public siblingGetter: undefined | ((id: string, direction: 'prev' | 'next') => string | undefined) = undefined;
     private currentId: string | undefined;
 
     private overlay!: HTMLElement;
@@ -115,10 +115,18 @@ export class Overlay {
         if (mode !== 'video') { this.video.removeAttribute('src'); this.video.pause(); this.video.load(); }
     }
 
+    private setIdAndUpdateNav(id: string | undefined, allowNav: boolean = true): void {
+        this.currentId = id;
+        const prevId = this.siblingGetter && id ? this.siblingGetter(id, 'prev') : undefined;
+        const nextId = this.siblingGetter && id ? this.siblingGetter(id, 'next') : undefined;
+        this.navLeftIcon.classList.toggle('enabled', Boolean(prevId) && allowNav);
+        this.navRightIcon.classList.toggle('enabled', Boolean(nextId) && allowNav);
+    }
+
     /**
      * Shows an error icon with message.
      */
-    showError(messageHtml: string, detailsText: string | undefined): void {
+    public showError(messageHtml: string, detailsText: string | undefined): void {
         this.setVisibility('error');
         this.errorText.innerHTML = messageHtml + (detailsText ? `<br/><br/>${escapeHtml(detailsText)}` : '');
     }
@@ -127,8 +135,8 @@ export class Overlay {
      * Shows the overlay with the specified driveItem id.
      * Spinner is shown at start, until video/image is loaded or error is displayed
      */
-    async showId(id: string): Promise<void> {
-        this.currentId = id;
+    public async showId(id: string): Promise<void> {
+        this.setIdAndUpdateNav(id);
         this.setVisibility('spinner');
 
         const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${id}?expand=tags,thumbnails`);
@@ -142,11 +150,6 @@ export class Overlay {
             return;
         }
 
-        const prevId = this.siblingGetter ? this.siblingGetter(id, 'prev') : undefined;
-        const nextId = this.siblingGetter ? this.siblingGetter(id, 'next') : undefined;
-        this.navLeftIcon.classList.toggle('enabled', Boolean(prevId));
-        this.navRightIcon.classList.toggle('enabled', Boolean(nextId));
-
         const onError = (e: string | Event): void => {
             this.showError(`Unable to show image.<br/><a href="${driveItem.webUrl}" target="geo-pic-image">Open in OneDrive</a>`, e instanceof ErrorEvent ? e.message : typeof e === 'string' ? e : undefined);
         }
@@ -155,7 +158,7 @@ export class Overlay {
             this.video.onerror = onError;
             this.video.src = driveItem['@microsoft.graph.downloadUrl'];
         } else {
-            const tagList = (driveItem.tags || []).map((t: any) => t.name);
+            const tagList = (driveItem.tags || []).map((t: any) => t.name).map(escapeHtml);
             const tags = tagList.length > 0 ? `<br/>[${tagList.join(', ')}]` : '';
             const date = new Date(driveItem.lastModifiedDateTime).toLocaleDateString();
             this.imageDescription.innerHTML = `${date} &bull; ${driveItem.name}${tags}<br/><a href="${driveItem.webUrl}" target="geopic-image">Click to open full image in OneDrive</a>`;
@@ -165,10 +168,19 @@ export class Overlay {
         }
     }
 
+    /**
+     * This is an alternative to showId, for when we have a dataUrl that can be shown immediately
+     */
+    public showDataUrl(id: string, url: string, descriptionHtml: string): void {
+        this.setIdAndUpdateNav(id, false);
+        this.setVisibility('image');
+        this.imageDescription.innerHTML = descriptionHtml;
+        this.img.src = url;
+    }
 
     private dismiss(): void {
         if (document.fullscreenElement) document.exitFullscreen();
         this.setVisibility('dismissed');
-        this.currentId = undefined;
+        this.setIdAndUpdateNav(undefined);
     }
 }
