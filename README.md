@@ -22,7 +22,7 @@ View your vacation photos on an interactive world map. Zoom in to photos from ho
 
 ## Troubleshooting
 
-*Missing old photos* Geopic only shows photos that have geotags. I used to use a digital camera until 2016 so none of my old photos have geotags and they don't show up here; only the new ones I took with my iPhone since then.
+*Missing old photos?* Geopic only shows photos that have geotags. I used to use a digital camera until 2016 so none of my old photos have geotags and they don't show up here; only the new ones I took with my iPhone since then.
 
 *Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on, and is working. Sometimes it turn off by itself.
 
@@ -34,7 +34,7 @@ View your vacation photos on an interactive world map. Zoom in to photos from ho
 
 *Something's stuck?* Try logging out ⏏, refreshing your browser, and reloading.
 
-*Error while indexing?* Building an index is demanding! It needs to read every single photo from your OneDrive! Sometimes you'll see "(throttling)", which Geopic does automatically when Microsoft's OneDrive servers are overloaded; that's normal. Sometimes they'll just randomly flake out and you'll see an error message. Try refreshing and try again: that normally fixes it. If that doesn't work then logout ⏏, reload the page, and try again. If you keep getting an error message every single time, please create an issue here on github. You should copy+paste the exact error text that it produced.
+*Error while indexing?* Building an index is demanding! It needs to read every single photo from your OneDrive! Sometimes you'll see (throttling), which Geopic does automatically when Microsoft's OneDrive servers are overloaded; that's normal. Sometimes they'll just randomly flake out and you'll see an error message. Try refreshing and try again: that normally fixes it. If that doesn't work then logout ⏏, reload the page, and try again. If you keep getting an error message every single time, please create an issue here on github. You should copy+paste the exact error text that it produced.
 
 
 ## Contributing
