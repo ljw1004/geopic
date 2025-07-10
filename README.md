@@ -1,6 +1,8 @@
 # Geopic
 
-View your vacation photos on an interactive world map. Zoom in to photos from home when your kids were young. **Geopic** is a fast way to view your OneDrive photo and video collection. [Demo](https://youtu.be/QbW-GhF6dhU)
+View your vacation photos on an interactive world map. Zoom in to photos from home when your kids were young. **Geopic** is a fast way to view your OneDrive photo and video collection.
+* Try it out: https://unto.me/geopic
+* Video demo: https://youtu.be/QbW-GhF6dhU
 
 ![Geopic Preview](preview.jpg)
 
