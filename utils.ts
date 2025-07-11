@@ -136,10 +136,7 @@ export async function rateLimitedBlobFetch<T>(f: (count: number, total: number, 
             fetches.set(i, fetch);
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
-        if (fetches.size === 0) {
-            throw new Error(`Invariant violation: fetches=${fetches.size}, queue=${queue.length}`);
-        }
-        const { i, r } = await Promise.any(fetches.values());
+        const { i, r } = await Promise.any(fetches.values()).catch(e => { e.stack = `Promise.any() in rateLimitedBlobFetch with #fetches=${fetches.size} #queue=${queue.length}`; throw e; });
         fetches.delete(i);
 
         // Rate-limiting adjustment (up or down) and store/retry the result

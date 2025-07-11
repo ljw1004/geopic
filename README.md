@@ -32,13 +32,15 @@ or "when my kids were toddlers". Drag to select date-ranges. You can also zoom i
 
 ## Troubleshooting
 
+*How do I get started with OneDrive?* Back up all your phone's photos with the app: [Download on the App Store](https://apps.apple.com/us/app/microsoft-onedrive/id477537958) for iOS, or [Get it on Google Play](https://play.google.com/store/apps/details?id=com.microsoft.skydrive&hl=en_US) for Android. Under Settings, turn on "Camera Backup" to upload all existing photos and automatically upload new ones. Most users will need a paid plan to get more OneDrive storage, but their [subscription plans](https://www.microsoft.com/en-us/microsoft-365/onedrive/compare-onedrive-plans) are better value for money than iCloud or Google Photos.
+
 *Missing old photos?* Geopic only shows photos that have time and location geotags. I used to
 use a digital camera until 2016 so none of my old photos have geotags and they don't show up here;
 only the new ones I took with my iPhone since then. I've been gradually adding tags
 to old photos with the free [GeoTag](https://apps.apple.com/us/app/geotag/id1465180184) app for Mac.
 
 *Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on,
-and is working. Sometimes it turns off by itself.
+and is working. Sometimes it turns off by itself, for example when you upgrade your phone's version.
 
 *Keyword searches not working?* Keyword searches are only based on a photo's folder name, filename,
 and the AI-powered tags that OneDrive itself applied to them (and it only has a few fairly generic
@@ -59,7 +61,7 @@ If you keep getting an error message every single time, please create an issue h
 You should copy+paste the exact error text that it produced.
 
 *Doesn't work on mobile?* Sorry, Geopic has only been designed for desktop, and has only been tested on
-Chrome. That's work in progress.
+Chrome. Mobile support is work in progress.
 
 *Google Photos, or iCloud?* Geopic is only for OneDrive.
 If you're paying for iCloud then you can already use the Photos > Collections > Map on your iPhone/iPad
