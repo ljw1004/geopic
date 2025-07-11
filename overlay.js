@@ -158,7 +158,7 @@ export class Overlay {
             this.video.src = driveItem['@microsoft.graph.downloadUrl'];
         }
         else {
-            const tagList = (driveItem.tags || []).map((t) => t.name).map(escapeHtml);
+            const tagList = (driveItem.tags ?? []).map((t) => t.name).map(escapeHtml);
             const tags = tagList.length > 0 ? `<br/>[${tagList.join(', ')}]` : '';
             const date = new Date(driveItem.photo.takenDateTime).toLocaleDateString();
             this.imageDescription.innerHTML = `${date} &bull; ${driveItem.name}${tags}<br/><a href="${driveItem.webUrl}" target="geopic-image">Click to open full image in OneDrive</a>`;

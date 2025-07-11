@@ -1,6 +1,6 @@
-# Geopic
+# Geopic for OneDrive
 
-View your vacation photos on an interactive world map. Zoom in to photos from home when your kids were young. **Geopic** is a fast way to view your OneDrive photo and video collection.
+View your vacation photos on an interactive world map. Zoom in to photos from home when your kids were young. **Geopic** is a fast way to browse your OneDrive photo and video collection through space and time.
 * Try it out: https://unto.me/geopic
 * Video demo: https://youtu.be/0ewFBBdQN9o
 
@@ -8,36 +8,63 @@ View your vacation photos on an interactive world map. Zoom in to photos from ho
 
 ## How it works
 
-*Your photos remain private!* Everything remains on your own personal OneDrive. All Geopics does is read your Photos folder, and then store its index in "Apps > Geopic" folder for faster viewing. The photos never go anywhere else other than your personal OneDrive and your web browser.
+*Your photos remain private!* Everything remains on your own personal OneDrive. All Geopics does is
+read your Photos folder, and then store its index in "Apps > Geopic" folder for faster viewing.
+The photos never go anywhere else other than your personal OneDrive and your web browser.
 
-**Relive your travels**. Click anywhere on the world map to see photos you took there. Zoom into your hometown, that beach in Hawaii, or the city you visited last summer. You can also right-click to zoom out.
+**Relive your travels**. Click anywhere on the world map to see photos you took there. Zoom into
+your hometown, that beach in Hawaii, or the city you visited last summer. You can also right-click to zoom out.
 
-**Slideshow mode**. Click on an image to enlarge it. While looking at photos/videos, there's also a full-screen button at the bottom right, and left/right buttons to either side. Click again (or press Escape) to dismiss and go back to the map.
+**Slideshow mode**. Click on an image to enlarge it. While looking at photos/videos, there's
+also a full-screen button at the bottom right, and left/right buttons to either side.
+Click again (or press Escape) to dismiss and go back to the map.
 
-**Search your collection**. Search for "Person" to find family photos, "Flower" for garden shots, "2024" to see last year's adventures, ".mov" (iPhone) or ".mp4" (Android) to find yur videos. Search works on photo tags, folder names and filenames.
+**Search your collection**. Search for "Person" to find family photos, "Flower" for garden shots,
+"2024" to see last year's adventures, ".mov" (iPhone) or ".mp4" (Android) to find your videos.
+Search works on photo tags, folder names and filenames.
 
-**Find specific memories**. Use the timeline at the top left to jump to "that amazing week in Italy" or "when my kids were toddlers". Drag to select date-ranges. You can also zoom in to narrow it down.
+**Find specific memories**. Use the timeline at the top left to jump to "that amazing week in Italy"
+or "when my kids were toddlers". Drag to select date-ranges. You can also zoom in to narrow it down.
 
 *Geopic is still work in progress*. It sometimes feels a bit janky when you click or zoom and it doesn't do what you think it was going to do. I'm working on that...
 
 ## Troubleshooting
 
-*Missing old photos?* Geopic only shows photos that have geotags. I used to use a digital camera until 2016 so none of my old photos have geotags and they don't show up here; only the new ones I took with my iPhone since then.
+*Missing old photos?* Geopic only shows photos that have geotags. I used to use a digital camera
+until 2016 so none of my old photos have geotags and they don't show up here; only the new ones
+I took with my iPhone since then.
 
-*Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on, and is working. Sometimes it turn off by itself.
+*Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on,
+and is working. Sometimes it turns off by itself.
 
-*Keyword searches not working?* Keyword searches are only based on a photo's folder name, filename, and the AI-powered tags that OneDrive itself applied to them (and it only has a few fairly generic tags like Person, Fashion, Flower, Restaurant). If you search for a placename like "Paris" it won't work unless you deliberately named one of your folders "Paris" on OneDrive. If you search for a family member name like "Fred" that won't work because OneDrive doesn't use personal information in its tags. You can see what tags OneDrive chose for a photo when you enlarge it.
+*Keyword searches not working?* Keyword searches are only based on a photo's folder name, filename,
+and the AI-powered tags that OneDrive itself applied to them (and it only has a few fairly generic
+tags like Person, Fashion, Flower, Restaurant). If you search for a placename like "Paris" it won't
+work unless you deliberately named one of your folders "Paris" on OneDrive. If you search for a family
+member name like "Fred" that won't work because OneDrive doesn't use personal information in its tags.
+You can see what tags OneDrive chose for a photo when you enlarge it.
 
-*Slow loading?* The first time you use Geopic, it has to look at every single one of your photos to find their locations. This takes up to half an hour for 50,000 photos (about ten year's worth). It writes an index of everything it found, so it's pretty much instantaneous next time.
+*Why do photos look blurry?* To keep things fast, Geopics shows at most an 800x600 pixel version of your photos. To get full resolution, click the "Open in OneDrive" link.
 
-*Doesn't work on mobile?* Sorry, Geopic has only been designed for desktop, and has only been tested on Chrome. That's work in progress.
+*Stuck/error while indexing?* Building an index is demanding! It needs to read every single photo from
+your OneDrive! Sometimes you'll see "throttling" when Microsoft's OneDrive servers have rate-limited
+you. That's normal, and Geopic will keep trying until they're free.
+Sometimes the servers will just randomly stalll or flake out and you might see no progress for ten
+minutes, or an error message. Try refreshing and try again: it will pick up where it left off.
+If that doesn't work then logout ⏏, reload the page, and try again.
+If you keep getting an error message every single time, please create an issue here on github.
+You should copy+paste the exact error text that it produced.
 
-*Something's stuck?* Try logging out ⏏, refreshing your browser, and reloading.
+*Doesn't work on mobile?* Sorry, Geopic has only been designed for desktop, and has only been tested on
+Chrome. That's work in progress.
 
-*Error while indexing?* Building an index is demanding! It needs to read every single photo from your OneDrive! Sometimes you'll see (throttling), which Geopic does automatically when Microsoft's OneDrive servers are overloaded; that's normal. Sometimes they'll just randomly flake out and you'll see an error message. Try refreshing and try again: that normally fixes it. If that doesn't work then logout ⏏, reload the page, and try again. If you keep getting an error message every single time, please create an issue here on github. You should copy+paste the exact error text that it produced.
+*Google Photos, or iCloud?* Geopic is only for OneDrive.
+If you're paying for iCloud then you can already use the Photos > Collections > Map on your iPhone/iPad
+(and I hope you don't mind 50gb of your phone used for "optimized storage" for your 500gb iCloud
+collection...) If you're paying for Google Photos then you can already use Photos > Your Map on your
+Android device. As far as I'm aware, neither offer the same filtering ability as Geopic.
 
-
-## Contributing
+## Contributing and self-hosting
 
 1. `npm install` first time
 2. `tsc` or `tsc --watch` to typecheck+build

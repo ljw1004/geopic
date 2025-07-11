@@ -113,21 +113,19 @@
         }
 
         h1 {
-            display: inline;
-            font-size: 1em;
-            color: #2d7d32;
-            text-decoration: none;
-            margin-right: 0.1em;
-            font-variant: small-caps;
+            display: inline-block;
+            font-size: 1.85ex;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: -0.09em;
+            margin: 0;
+            margin-right: 0.2em;
         }
 
-        h1 a {
-            color: #2d7d32;
-            text-decoration: none;
-        }
-
+        h1 a,
         h1 a:visited {
-            color: #2d7d32;
+            text-decoration: none;
+            color: #465775;
         }
 
         h1 a:hover {
@@ -348,7 +346,7 @@
             object-fit: cover;
         }
 
-        #map-container div img {
+        .zoomable {
             cursor: zoom-in;
         }
 
@@ -543,14 +541,12 @@
 
 <body>
     <div id="side-panel">
+        <!-- THE TITLE AND INSTRUCTIONS! -->
         <div id="instructions"></div>
 
-        <div id="data-management">
-            <button id="generate" style="display:none;">Generate geo.json ...</button>
-            <button id="logout" style="display:none;">Logout</button>
-        </div>
-
         <div id="filters">
+
+            <!-- THE HISTOGRAM! -->
             <div id="histogram-container" tabindex="0">
                 <div class="histogram-chart">
                     <!-- Template bars for cloning -->
@@ -586,33 +582,46 @@
             </div>
         </div>
 
+        <!-- THE TEXT FILTER! -->
         <div id="text-filter-container">
             <input type="text" id="text-filter" placeholder="" autocomplete="off" spellcheck="false" />
         </div>
 
+        <!-- THE THUMBNAILS! -->
         <div id="thumbnails-scroll-area">
             <div id="thumbnails-grid"></div>
         </div>
     </div>
 
+    <!-- THE MAP! -->
     <div id="map-container">
         <gmp-map id="map" center="37.422,-122.0840" zoom="4" map-id="5d7eeda627cfbcf67ae37695"></gmp-map>
     </div>
 
+    <!-- THE FULL-SCREEN OVERLAY FOR MEDIA AND ERRORS! -->
     <div id="overlay" style="display: none;">
+        <!-- Loading spinner (shown while fetching media) -->
         <div class="spinner overlay-spinner"></div>
+
+        <!-- Error display with robot icon and message -->
         <div class="overlay-error">
             <div class="overlay-error-icon">&#x1F916;</div>
             <div class="overlay-error-text"></div>
         </div>
+
+        <!-- Navigation arrows (left/right) -->
         <div class="overlay-nav left">
             <div class="overlay-nav-icon left">&#x25C0;</div>
         </div>
         <div class="overlay-nav right">
             <div class="overlay-nav-icon right">&#x25B6;</div>
         </div>
+
+        <!-- Media display elements -->
         <img class="overlay-media" />
         <video class="overlay-media" controls autoplay style="display: none;"></video>
+
+        <!-- Bottom controls with metadata and fullscreen button -->
         <div class="overlay-image-controls">
             <div class="overlay-image-description"></div>
             <div class="overlay-image-fullscreen-icon">&#x26F6;</div>

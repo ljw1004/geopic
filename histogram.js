@@ -234,9 +234,9 @@ export class Histogram {
         const savedStateRaw = localStorage.getItem('histogram-state');
         if (savedStateRaw) {
             const savedState = JSON.parse(savedStateRaw);
-            this.bounds = savedState.bounds || { start: 20250101, end: 20251231 };
-            this.selection = savedState.selection || undefined;
-            this.fullRange = savedState.fullRange || { start: 0, end: 0 };
+            this.bounds = savedState.bounds ?? { start: 20250101, end: 20251231 };
+            this.selection = savedState.selection ?? undefined;
+            this.fullRange = savedState.fullRange ?? { start: 0, end: 0 };
         }
     }
     /**

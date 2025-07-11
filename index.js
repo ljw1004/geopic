@@ -13,13 +13,11 @@
  */
 // Google Maps type imports
 /// <reference types="google.maps" />
-import { generateImpl, asClusters, boundsForDateRange, numToDate } from './geoitem.js';
+import { indexImpl, asClusters, boundsForDateRange, numToDate } from './geoitem.js';
+import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, myFetch } from './utils.js';
 import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
 import { Overlay } from './overlay.js';
-// The markerClusterer library is loaded from CDN, as window.marketClusterer.
-// The following workaround is to give it strong typing.
-import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, myFetch } from './utils.js';
 /**
  * ONEDRIVE INTEGRATION AND CREDENTIALS: CODE FLOW WITH PKCE
  * 1. The user navigates to "index.html" and we offer a login button, which they click.
@@ -48,8 +46,8 @@ let OVERLAY;
 let HISTOGRAM;
 let TEXT_FILTER;
 // The items that histogram/map should work off. This is typically a copy of the local cache,
-// set only once during onLoad. But during photo ingestion it gets updated through the
-// course of ingestion. It's undefined if there's no local cache and ingestion hasn't start.
+// set only once during onLoad. But during photo indexing it gets updated through the
+// course of indexing. It's undefined if there's no local cache and indexing hasn't start.
 let g_geoData;
 // This is the filter that's implied by the current filter controls. It gets updated
 // in response to user actions, by installHandlers. It gets read by showCurrentGeodata.
@@ -76,7 +74,7 @@ export async function onBodyLoad() {
     TEXT_FILTER = document.getElementById('text-filter');
     // Set up map, thumbnails, histogram
     g_geoData = await dbGet();
-    if (g_geoData && g_geoData.id === 'sample-data' && localStorage.getItem('access_token'))
+    if (g_geoData && g_geoData.id === 'sample-data' && (code || localStorage.getItem('access_token')))
         g_geoData = undefined;
     await installHandlers();
     showCurrentGeodata();
@@ -96,8 +94,8 @@ export async function onBodyLoad() {
     // Attempt to get Pictures metadata (so validating access token) and validate local cache. Outcomes:
     // - (!accessToken, !geoData, !status) -- user is signed out, no geo data
     // - (!accessToken, geoData, !status) -- user is signed out, geo data from local, we don't know if it's fresh or stale
-    // - (accessToken, !geoData, !status) -- user is signed in but no geo data has ever been generated
-    // - (accessToken, geoData, fresh|stale) -- user is signed in, geo data from most recent onedrive generation
+    // - (accessToken, !geoData, !status) -- user is signed in but no geo data has ever been indexed
+    // - (accessToken, geoData, fresh|stale) -- user is signed in, geo data from most recent onedrive indexing
     let photosDriveItem = null;
     document.getElementById('instructions').innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
@@ -110,11 +108,11 @@ export async function onBodyLoad() {
     instruct(status);
     // Initial action
     const accessToken = localStorage.getItem('access_token');
-    if (accessToken && state === 'generate') {
-        onGenerateClick();
+    if (accessToken && state === 'index') {
+        onIndexClick();
     }
     else if (!accessToken && !g_geoData) {
-        const r = await myFetch('sample.json');
+        const r = await myFetch('https://ljw1004.github.io/geopic/sample.json');
         if (r.ok) {
             g_geoData = await r.json();
             dbPut(g_geoData);
@@ -235,6 +233,8 @@ async function installHandlers() {
         }
     });
     OVERLAY.siblingGetter = (id, direction) => {
+        if (!g_geoData || g_geoData.id === 'sample-data')
+            return undefined;
         const items = Array.from(document.getElementById('thumbnails-grid').children)
             .map(img => img instanceof HTMLImageElement ? img.getAttribute('data-id') : null)
             .filter(id => id !== null);
@@ -248,7 +248,7 @@ async function installHandlers() {
     };
     TEXT_FILTER.placeholder = 'Filter, e.g. Person or 2024/03';
     MAP.addListener('rightclick', () => {
-        const currentZoom = MAP.getZoom() || 1;
+        const currentZoom = MAP.getZoom() ?? 1;
         MAP.setZoom(Math.max(1, currentZoom - 3));
     });
 }
@@ -256,8 +256,8 @@ function instruct(mode) {
     let instructions;
     const title = '<h1><a href="https://github.com/ljw1004/geopic/blob/main/README.md">Geopic</a></h1> ';
     const sample = g_geoData && g_geoData.id === 'sample-data' ? '<br/><b>Showing sample data for now.</b>' : '';
-    if (mode === 'generating') {
-        instructions = `${title} Ingesting photos <span class="spinner"></span><br/>`
+    if (mode === 'indexing') {
+        instructions = `${title} Indexing photos <span class="spinner"></span><br/><br/>`
             + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
             + `You can reload this page and it will pick up where it left off. `
             + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
@@ -266,19 +266,18 @@ function instruct(mode) {
         instructions = `${title} ${g_geoData?.geoItems.length} photos <span title="logout" id="logout">\u23CF</span>`;
     }
     else if (mode === 'stale') {
-        instructions = `${title} <span id="generate">Ingest all new photos...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
+        instructions = `${title} <span id="index">Index all new photos...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     }
     else if (localStorage.getItem('access_token')) {
-        instructions = `${title} <span id="generate">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
+        instructions = `${title} <span id="index">Index your photo collection...</span> <span title="logout" id="logout">\u23CF</span>${sample}`;
     }
     else {
         instructions = `${title} <span id="login">Login to OneDrive to index your photos...</span>${sample}`;
     }
-    // instructions += '<br/><span id="clear">Clear cache...</span>';
     document.getElementById('instructions').innerHTML = instructions;
     document.getElementById('login')?.addEventListener('click', onLoginClick);
     document.getElementById('logout')?.addEventListener('click', onLogoutClick);
-    document.getElementById('generate')?.addEventListener('click', onGenerateClick);
+    document.getElementById('index')?.addEventListener('click', onIndexClick);
     document.getElementById('clear')?.addEventListener('click', onClearClick);
 }
 async function onClearClick() {
@@ -303,7 +302,7 @@ export async function onLoginClick() {
         scope: 'files.readwrite offline_access',
         code_challenge,
         code_challenge_method: 'S256',
-        state: 'generate'
+        state: 'index'
     });
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
 }
@@ -328,32 +327,28 @@ function showCurrentGeodata() {
     const bounds = MAP.getBounds();
     if (!bounds)
         return;
-    const sw = (MAP.getZoom() || 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
-    const ne = (MAP.getZoom() || 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
+    const sw = (MAP.getZoom() ?? 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
+    const ne = (MAP.getZoom() ?? 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, g_geoData, g_filter);
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
     function showItem(item) {
         if (g_geoData?.id === 'sample-data')
-            OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h1>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h1> ${escapeHtml(item.name)}`);
+            OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h2>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h2> ${escapeHtml(item.name)}`);
         else
             OVERLAY.showId(item.id);
     }
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
-        const imgClassName = cluster.totalPassFilterItems === 0 ? 'filtered-out' : g_filter.text ? 'filter-glow' : '';
+        const isUsefulToZoom = (MAP.getZoom() ?? 0) <= 12 || clusters.length > 8
+            || totalPassFilterCount - cluster.totalPassFilterItems > 8 || cluster.totalPassFilterItems > 8;
+        const clickWillZoom = (MAP.getZoom() ?? 22) < 22 && cluster.totalPassFilterItems > 1 && isUsefulToZoom;
+        const visualClass = cluster.totalPassFilterItems === 0 ? ['filtered-out'] : g_filter.text ? ['filter-glow'] : [];
+        const pointerClass = clickWillZoom ? ['zoomable'] : [];
+        const imgClassName = [...visualClass, ...pointerClass].join(' ');
         const spanText = cluster.totalPassFilterItems <= 1 ? undefined : cluster.totalPassFilterItems.toString();
-        const isUsefulToZoom = (MAP.getZoom() || 100) < 17 || clusters.length > 10
-            || totalPassFilterCount - cluster.totalPassFilterItems > 10 || cluster.totalPassFilterItems > 10;
-        const onClick = () => {
-            if (cluster.totalPassFilterItems === 1)
-                showItem(item);
-            else if (isUsefulToZoom)
-                MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne));
-            else
-                MAP.setCenter(cluster.center);
-        };
+        const onClick = () => clickWillZoom ? MAP.fitBounds(new google.maps.LatLngBounds(cluster.bounds.sw, cluster.bounds.ne)) : showItem(item);
         const marker = MARKER_POOL.add(item.id, item.thumbnailUrl, imgClassName, spanText, onClick);
         marker.position = item.position;
         marker.zIndex = cluster.totalPassFilterItems;
@@ -372,12 +367,12 @@ function showCurrentGeodata() {
     HISTOGRAM.setData(tally);
 }
 /**
- * This function is called when the user clicks the "Generate" button.
+ * This function is called when the user clicks the "Index" button.
  * It does a recursive walk of the user's OneDrive Photos folder,
  * and uploads the resulting geo.json file, and updates the link.
  */
-export async function onGenerateClick() {
-    instruct('generating');
+export async function onIndexClick() {
+    instruct('indexing');
     const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos');
     if (!r.ok) {
         instruct(undefined);
@@ -409,7 +404,7 @@ export async function onGenerateClick() {
     }
     const photosDriveItem = await r.json();
     try {
-        g_geoData = await generateImpl(progress, photosDriveItem);
+        g_geoData = await indexImpl(progress, photosDriveItem);
         await dbPut(g_geoData);
         showCurrentGeodata();
         instruct('fresh');
@@ -418,7 +413,7 @@ export async function onGenerateClick() {
         instruct(undefined);
         let details = String(e);
         if (e instanceof Error) {
-            const lines = e.stack?.split('\n') || [];
+            const lines = e.stack?.split('\n') ?? [];
             if (lines.length > 0 && lines[0].includes(e.message))
                 lines.shift();
             const stack = lines.length > 0 ? ` -  - ` + lines.join(' - ') : '';

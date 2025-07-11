@@ -218,7 +218,7 @@ function createGeoItem(driveItem: any, folderIndex: number): GeoItem {
         date,
         thumbnailUrl: driveItem.thumbnails[0].small.url,
         folderIndex,
-        tags: (driveItem.tags || []).map((t: any) => t.name.toLowerCase()),
+        tags: (driveItem.tags ?? []).map((t: any) => t.name.toLowerCase()),
     };
 }
 
@@ -248,11 +248,9 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
 
 /**
  * Recursive walk of all photos in the Pictures folder, reading and writing a persistent cache in OneDrive.
- * Takes ~20mins for 10 years' worth of photos.
- * 
- * TODO: when cache is invalid but exists, any cached geoItems (with thumbnails) are still valid and should be used.
+ * Takes ~30mins for 10 years' worth of photos.
  */
-export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, photosDriveItem: any): Promise<GeoData> {
+export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, photosDriveItem: any): Promise<GeoData> {
     const waiting = new Map<string, WorkItem>();
     const toProcess: WorkItem[] = [];
     const toFetch: WorkItem[] = [createStartWorkItem(photosDriveItem, [])];
@@ -266,16 +264,20 @@ export async function generateImpl(progress: (p: string[] | GeoItem[]) => void, 
         }
     }
 
+    let lastSuccessfulActivity = performance.now();
     while (true) {
         const item = toProcess.shift();
         if (item && item.state === 'START') {
             const cacheResult = item.responses[`cache-${item.data.id}`];
             const childrenResult = item.responses[`children-${item.data.id}`];
             if (childrenResult.body.error && childrenResult.body.error.code === 'activityLimitReached') {
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                await new Promise(resolve => setTimeout(resolve, 10000));
                 toProcess.unshift(item);
+                const duration = (performance.now() - lastSuccessfulActivity) / 1000;
+                log(item)(`throttling for ${duration < 300 ? Math.round(duration) + 's' : Math.round(duration / 60) + 'mins'}`);
                 continue;
             }
+            lastSuccessfulActivity = performance.now();
             if (childrenResult.body.error) {
                 throw new FetchError(`${childrenResult.request.url}[child]`, new Response(childrenResult.body, { status: childrenResult.status }), JSON.stringify(childrenResult.body));
             }
