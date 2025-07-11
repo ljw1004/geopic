@@ -259,7 +259,7 @@ function instruct(mode) {
     const sample = g_geoData && g_geoData.id === 'sample-data' ? '<br/><b>Showing sample data for now.</b>' : '';
     if (mode === 'indexing') {
         instructions = `${title} Indexing photos <span class="spinner"></span><br/><br/>`
-            + `A full index takes ~30mins for 50,000 photos on a good network; incremental updates will finish in ~30 seconds. `
+            + `A full index takes about 1 hour for 50,000 photos; incremental updates will finish in about 30 seconds. `
             + `You can reload this page and it will pick up where it left off. `
             + `<pre id="progress">[...preparing bulk indexer...]</pre>`;
     }
@@ -342,9 +342,10 @@ function showCurrentGeodata() {
     clusters.sort((a, b) => b.totalPassFilterItems - a.totalPassFilterItems);
     for (const cluster of clusters) {
         const item = cluster.somePassFilterItems.length > 0 ? cluster.somePassFilterItems[0] : cluster.oneFailFilterItem;
+        const allColocated = cluster.somePassFilterItems.every(i => i.position.lat === item.position.lat && i.position.lng === item.position.lng);
         const isUsefulToZoom = (MAP.getZoom() ?? 0) <= 12 || clusters.length > 8
             || totalPassFilterCount - cluster.totalPassFilterItems > 8 || cluster.totalPassFilterItems > 8;
-        const clickWillZoom = (MAP.getZoom() ?? 22) < 22 && cluster.totalPassFilterItems > 1 && isUsefulToZoom;
+        const clickWillZoom = (MAP.getZoom() ?? 22) < 22 && !allColocated && cluster.totalPassFilterItems > 1 && isUsefulToZoom;
         const visualClass = cluster.totalPassFilterItems === 0 ? ['filtered-out'] : g_filter.text ? ['filter-glow'] : [];
         const pointerClass = clickWillZoom ? ['zoomable'] : [];
         const imgClassName = [...visualClass, ...pointerClass].join(' ');

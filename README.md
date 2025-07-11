@@ -32,9 +32,10 @@ or "when my kids were toddlers". Drag to select date-ranges. You can also zoom i
 
 ## Troubleshooting
 
-*Missing old photos?* Geopic only shows photos that have geotags. I used to use a digital camera
-until 2016 so none of my old photos have geotags and they don't show up here; only the new ones
-I took with my iPhone since then.
+*Missing old photos?* Geopic only shows photos that have time and location geotags. I used to
+use a digital camera until 2016 so none of my old photos have geotags and they don't show up here;
+only the new ones I took with my iPhone since then. I've been gradually adding tags
+to old photos with the free [GeoTag](https://apps.apple.com/us/app/geotag/id1465180184) app for Mac.
 
 *Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on,
 and is working. Sometimes it turns off by itself.
