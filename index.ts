@@ -120,6 +120,7 @@ export async function onBodyLoad(): Promise<void> {
         if (r.ok) {
             g_geoData = await r.json();
             dbPut(g_geoData);
+            instruct(status);
             showCurrentGeodata();
         } else {
             console.error(r.text());

@@ -119,10 +119,26 @@ export async function rateLimitedBlobFetch<T>(f: (count: number, total: number, 
             const i = queue.shift();
             if (i === undefined) break;
             await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
-            fetches.set(i, myFetch(urls[i][0]).
-                then(async r => ({ i, r: r.ok ? await r.blob() : new FetchError(`${urls[i][0]}[rateLimitedBlob]`, r, await r.text()) })));
+            const fetch = myFetch(urls[i][0]).
+                then(async r => {
+                    try {
+                        if (r.ok) {
+                            const blob = await r.blob();
+                            return { i, r: blob };
+                        } else {
+                            const err = new FetchError(`${urls[i][0]}[rateLimitedBlob]`, r, await r.text());
+                            return { i, r: err };
+                        }
+                    } catch (e) {
+                        return { i, r: new FetchError(`${urls[i][0]}[rateLimitedBlobException]`, errorResponse(e), String(e)) };
+                    }
+                });
+            fetches.set(i, fetch);
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
+        if (fetches.size === 0) {
+            throw new Error(`Invariant violation: fetches=${fetches.size}, queue=${queue.length}`);
+        }
         const { i, r } = await Promise.any(fetches.values());
         fetches.delete(i);
 

@@ -89,4 +89,5 @@ I prefer clean documented minimal code. That means:
 - Prefer functional-style code, where variables are immutable "const" and there's less branching. Prefer to use ternary expressions "b ? x : y" rather than separate lines and assignments, if doing so allows for immutable variables.
 
 ## TODO
+- Verify app. Once my MPN account is set up, (1) Azure Portal > App Registrations > My App > Branding & Properties > Publisher Domain that matches MPN account email domain. (2) Branding & Properties > add a verified publisher > MPN ID > verify and save.
 - Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.

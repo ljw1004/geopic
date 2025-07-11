@@ -1,8 +1,10 @@
 # Geopic for OneDrive
 
-View your vacation photos on an interactive world map. Zoom in to photos from home when your kids were young. **Geopic** is a fast way to browse your OneDrive photo and video collection through space and time.
-* Try it out: https://unto.me/geopic
-* Video demo: https://youtu.be/0ewFBBdQN9o
+**Geopic** is a fast way to browse your OneDrive photo and video collection through space and time.
+View your vacation photos on an interactive world map. Zoom in to photos from home when your kids
+were young. It's free.
+* Use it now: https://unto.me/geopic
+* Video demo: https://youtu.be/s5_HOz0dX84
 
 ![Geopic Preview](preview.jpg)
 
@@ -66,6 +68,10 @@ Android device. As far as I'm aware, neither offer the same filtering ability as
 
 ## Contributing and self-hosting
 
+This is a hobby project. I made it just because I needed a better way to view my photo archive.
+I hope you enjoy using it, or enhancing it, or taking the code and hosting it on your own website.
+And if the OneDrive folks over at Microsoft decide to incorporate this kind of thing, please do!
+
 1. `npm install` first time
 2. `tsc` or `tsc --watch` to typecheck+build
 3. View index.html in its intended final domain, in a web-browser...
@@ -73,3 +79,6 @@ Android device. As far as I'm aware, neither offer the same filtering ability as
 This index.html is only functional in its intended final domain. This is because of two keys. If you are forking for your own domain, you'll need to get your own keys.
 * **OneDrive Integration**: You need to register an application in the [Microsoft Azure Portal](https://portal.azure.com/) under your web domain, and get the CLIENT_ID key (stored in index.ts). The CLIENT_ID is tied specifically to that domain: when it does OAuth2 redirection, OneDrive checks CLIENT_ID, looks up its internal database of how the app is registered, and only allows authentication redirects to its registered redirect URI. The CLIENT_ID currently in index.ts only allows redirects to https://unto.me/geopics -- hosting it anywhere else won't work.
 * **Google Maps integration**. You need to register yourself for Google Maps in the [Google Cloud Console](https://console.cloud.google.com/) and get a key. In the registration, you should remember to configure it to only allow Google Maps API requests from the domain you name. We pass the key in via the <script/> tag in index.html. The key currently in index.html only allows Google Maps API requests from https://unto.me/geopics -- hosting it anywhere else won't allow the Google Maps API calls to work.
+
+I made a funny observation. The OneDrive thumbnail urls are 1.8k long. The small thumbnail content itself
+when encoded as a data-url is just 2.0k long. So it'd be better for OneDrive to serve them as data!

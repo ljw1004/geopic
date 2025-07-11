@@ -116,6 +116,7 @@ export async function onBodyLoad() {
         if (r.ok) {
             g_geoData = await r.json();
             dbPut(g_geoData);
+            instruct(status);
             showCurrentGeodata();
         }
         else {
