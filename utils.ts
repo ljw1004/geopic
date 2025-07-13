@@ -83,16 +83,16 @@ export function errorResponse(url: string, e: any): Response {
 
 /**
  * Like fetch(), but failures that throw exceptions are also reported as Response errors.
- * The retryOn429 callback is called in response to a "429 Too Many Requests" response.
- * If it returns false, this function returns the 429 response directly.
- * If it returns true, this function waits 2 seconds and retries the request.
+ * The retryOn429 callback is called upon "429 Too Many Requests" or "503 Service Unavailable".
+ * If it returns false, this function returns the 429/503 response directly.
+ * If it returns true, this function waits 2s for 429, 10s for 503, and retries the request.
  */
 export async function myFetch(url: string, retryOn429: () => boolean, options?: RequestInit): Promise<Response> {
     while (true) {
         try {
             const r = await fetch(url, options);
-            if (r.status !== 429 || !retryOn429()) return r;
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            if ((r.status !== 429 && r.status != 503)|| !retryOn429()) return r;
+            await new Promise(resolve => setTimeout(resolve, r.status === 429 ? 2000 : 10000));
         } catch (e) {
             return errorResponse(url, e);
         }
@@ -110,7 +110,7 @@ export function noRetryOn429(): boolean {
  * A possible retryOn429 strategy, for myFetch. This one retries indefinitely.
  */
 export function indefinitelyRetryOn429(): boolean {
-    console.warn('429 Too Many Requests: will retry...');
+    console.warn('429 Too Many Requests or 503 Service Unavailable: will retry...');
     return true;
 }
 

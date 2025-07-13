@@ -153,7 +153,7 @@ export async function indexImpl(progress, photosDriveItem) {
             // ========================================
             const cacheResult = item.responses[`cache-${item.data.id}`];
             const childrenResult = item.responses[`children-${item.data.id}`];
-            if (childrenResult.status === 429) {
+            if (childrenResult.status === 429 || childrenResult.status === 503) {
                 toFetch.unshift({ ...item, responses: {} });
                 const secondsSinceSuccess = Math.round((performance.now() - lastSuccessfulFetch) / 1000);
                 log(item)(`throttled for ${secondsSinceSuccess}s`);
