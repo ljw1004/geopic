@@ -14,7 +14,7 @@
 // Google Maps type imports
 /// <reference types="google.maps" />
 import { indexImpl, asClusters, boundsForDateRange, numToDate } from './geoitem.js';
-import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, myFetch } from './utils.js';
+import { authFetch, dbGet, dbPut, escapeHtml, exchangeCodeForToken, FetchError, indefinitelyRetryOn429, myFetch, noRetryOn429 } from './utils.js';
 import { Histogram } from './histogram.js';
 import { ImgPool, MarkerPool } from './pools.js';
 import { Overlay } from './overlay.js';
@@ -96,14 +96,9 @@ export async function onBodyLoad() {
     // - (!accessToken, geoData, !status) -- user is signed out, geo data from local, we don't know if it's fresh or stale
     // - (accessToken, !geoData, !status) -- user is signed in but no geo data has ever been indexed
     // - (accessToken, geoData, fresh|stale) -- user is signed in, geo data from most recent onedrive indexing
-    let photosDriveItem = null;
     document.getElementById('instructions').innerHTML = '<span class="spinner"></span> checking OneDrive for updates...';
-    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size');
-    try {
-        if (r.ok)
-            photosDriveItem = await r.json();
-    }
-    catch { }
+    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos?select=size', noRetryOn429);
+    const photosDriveItem = r.ok ? await r.json().catch(() => undefined) : null;
     const status = photosDriveItem && g_geoData ? (g_geoData.size === photosDriveItem.size ? 'fresh' : 'stale') : undefined;
     instruct(status);
     // Initial action
@@ -112,7 +107,7 @@ export async function onBodyLoad() {
         onIndexClick();
     }
     else if (!accessToken && !g_geoData) {
-        const r = await myFetch('https://ljw1004.github.io/geopic/sample.json');
+        const r = await myFetch('https://ljw1004.github.io/geopic/sample.json', noRetryOn429);
         if (r.ok) {
             g_geoData = await r.json();
             dbPut(g_geoData);
@@ -325,20 +320,11 @@ function showCurrentGeodata() {
     TEXT_FILTER.style.display = g_geoData ? 'inline-block' : 'none';
     if (!g_geoData)
         return;
-    // Google Maps API gives us no help when the map is zoomed out far, so that 
-    // it displays multiple copies of the globe side by side, and sw.lng and ne.lng
-    // represent the longitudes of the viewport on whichever side-by-side copy of the
-    // globe they happen to lie. We have no way of knowing which copy, hence no way
-    // of knowing if we've hit this "multiple copy" situation. One approach is to
-    // guess how many degrees the current pixel width and zoom level would be at
-    // the equator, and if that's more than 360 degrees then we're pretty far zoomed out.
-    // We'll do a cheaper hack, which is to say that if the zoom level is zoomed out
-    // far enough (<= 3) then we might as well show every photo in the entire world.
     const bounds = MAP.getBounds();
     if (!bounds)
         return;
-    const sw = (MAP.getZoom() ?? 0) <= 3 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
-    const ne = (MAP.getZoom() ?? 0) <= 3 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
+    const sw = { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
+    const ne = { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, g_geoData, g_filter);
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
@@ -384,7 +370,7 @@ function showCurrentGeodata() {
  */
 export async function onIndexClick() {
     instruct('indexing');
-    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos');
+    const r = await authFetch('https://graph.microsoft.com/v1.0/me/drive/special/photos', indefinitelyRetryOn429);
     if (!r.ok) {
         instruct(undefined);
         const reason = await r.text();

@@ -11,7 +11,7 @@ were young. It's free.
 ## How it works
 
 *Your photos remain private!* Everything remains on your own personal OneDrive. All Geopics does is
-read your Photos folder, and then store its index in "Apps > Geopic" folder for faster viewing.
+read your Photos folder from OneDrive, store its index from OneDrive for faster viewing.
 The photos never go anywhere else other than your personal OneDrive and your web browser.
 
 **Relive your travels**. Click anywhere on the world map to see photos you took there. Zoom into

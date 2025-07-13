@@ -2,7 +2,7 @@
  * Copyright (c) Lucian Wischik
  */
 
-import { FetchError, authFetch, blobToDataUrl, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
+import { FetchError, authFetch, blobToDataUrl, indefinitelyRetryOn429, multipartUpload, postprocessBatchResponse, progressBar, rateLimitedBlobFetch } from './utils.js';
 
 const SCHEMA_VERSION = 5;
 
@@ -265,30 +265,26 @@ export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, pho
     }
 
     let lastSuccessfulFetch = performance.now();
-    let lastActivityLimitRefresh = 0;
+    let got429recently = false;
+    // We're doing batch requests, so the 429s come in some of the responses within the batch,
+    // not the batch itself. We'll record whether any of them got "429 Too Many Requests", and if
+    // so then the next fetch wll delay.
+
     while (true) {
         const item = toProcess.shift();
         if (item && item.state === 'START') {
+
+            // ========================================
+            // ========== PROCESS START ITEM ==========
+            // ========================================
+
             const cacheResult = item.responses[`cache-${item.data.id}`];
             const childrenResult = item.responses[`children-${item.data.id}`];
-            if (childrenResult.body.error && childrenResult.body.error.code === 'activityLimitReached') {
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                toProcess.unshift(item);
+            if (childrenResult.status === 429) {
+                toFetch.unshift({ ...item, responses: {} });
                 const secondsSinceSuccess = Math.round((performance.now() - lastSuccessfulFetch) / 1000);
-                const secondsSinceRefresh = Math.round((performance.now() - lastActivityLimitRefresh) / 1000);
-
                 log(item)(`throttled for ${secondsSinceSuccess}s`);
-                // If we've been getting "activityLimitReached" for more than 2 minutes, let's try refreshing
-                // the access right now. It shouldn't work (on the grounds that I've seen "activityLimitReached"
-                // for several hours which must have encompassed at least one access token refresh).
-                // But it might work (on the grounds that reloading the browser always seems to fix it).
-                // We'll do this by currupting our access_token, so the next call to authFetch will get 401
-                // and will trigger its refresh workflow.
-                if (secondsSinceSuccess > 120 && secondsSinceRefresh > 120) {
-                    localStorage.setItem('access_token', 'TIME_TO_BLOW_THIS_JOINT');
-                    lastActivityLimitRefresh = performance.now();
-                    console.warn('activityLimitReached for more than 2 minutes; will refresh connection');
-                }
+                got429recently = true;
                 continue;
             }
             lastSuccessfulFetch = performance.now();
@@ -336,7 +332,14 @@ export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, pho
                 toFetch.sort((a, b) => cacheFilename(a.path).localeCompare(cacheFilename(b.path))); // alphabetical order to finish off subtrees quicker
                 waiting.set(cacheFilename(item.path), item);
             }
+
+
         } else if (item && item.state === 'END') {
+
+            // ========================================
+            // ========== PROCESS END ITEM ==========
+            // ========================================
+
             log(item)();
             if (item.path.length === 0) return item.data; // Finished the root folder!
 
@@ -367,41 +370,40 @@ export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, pho
                     toProcess.unshift({ ...parent, state: 'END', responses: {}, requests: [] });
                 }
             }
+
         } else {
+
+            // ========================================
+            // ========== FETCH =======================
+            // ========================================
+
             const thisFetch: WorkItem[] = [];
             const requests: any[] = [];
+            // batch API limit is 20 requests. Each of our items in toFetch has 1 or 2 requests.
             while (toFetch.length > 0 && requests.length < 18) {
                 const item = toFetch.shift()!;
                 requests.push(...item.requests);
                 thisFetch.push(item);
             }
-            let batchResponse: any = null;
-            const blowThisJointHeaders = localStorage.getItem('access_token') === 'TIME_TO_BLOW_THIS_JOINT'
-                ? { 'Connection': 'close', 'Cache-Control': 'no-cache, no-store' } : {};
+
+            if (got429recently) await new Promise(resolve => setTimeout(resolve, 10000));
+            got429recently = false;
             const url = 'https://graph.microsoft.com/v1.0/$batch';
-            while (true) {
-                const body = JSON.stringify({ requests });
-                batchResponse = await authFetch(url, {
-                    'method': 'POST',
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        ...blowThisJointHeaders,
-                    },
-                    'body': body
-                });
-                if (batchResponse.status !== 429) break;
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
+            const body = JSON.stringify({ requests });
+            const batchResponse = await authFetch(url, indefinitelyRetryOn429, {
+                'method': 'POST',
+                'headers': {'Content-Type': 'application/json'},
+                'body': body
+            });
             if (!batchResponse.ok) throw new FetchError(`${url}[POST:batch(${requests.length})]`, batchResponse, await batchResponse.text());
             const batchResult = await batchResponse.json();
-            await postprocessBatchResponse(batchResult);
+            await postprocessBatchResponse(batchResult, indefinitelyRetryOn429);
             for (const r of batchResult.responses) {
                 const item = thisFetch.find(item => item.requests.some(req => req.id === r.id))!;
                 const requests = item.requests.find(req => req.id === r.id);
                 r.request = requests;
                 item.responses[r.id] = r;
             }
-            thisFetch.forEach(item => item.requests = []);
             toProcess.push(...thisFetch);
         }
     }
@@ -451,9 +453,9 @@ export function asClusters(sw: Position, ne: Position, pixelWidth: number, geoDa
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
     const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: lngWrap((Math.floor(sw.lng / tileSize) * tileSize)) };
-    const numTilesX1 = Math.ceil(((ne.lng - swSnap.lng + 360) % 360) / tileSize);
-    const numTilesX2 = Math.ceil(((ne.lng - sw.lng + 360) % 360) / tileSize);
-    const numTilesX = Math.max(numTilesX1, numTilesX2); // because when fully zoomed out, swSnap.lng can become east of ne.lng!
+    const realWidth = (ne.lng - sw.lng + 360) % 360;
+    const snapWidth = (ne.lng - swSnap.lng + 360) % 360;  // this might have snapped westwards but gone right past ne.lng!
+    const numTilesX = Math.ceil((snapWidth < realWidth ? snapWidth + 360 : snapWidth) / tileSize);
     const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
     const tiles: Cluster[] = [];
     for (let y = 0; y < numTilesY; y++) {

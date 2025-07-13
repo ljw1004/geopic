@@ -2,7 +2,7 @@
  * Copyright (c) Lucian Wischik
  */
 
-import { authFetch, escapeHtml } from './utils.js';
+import { authFetch, escapeHtml, noRetryOn429 } from './utils.js';
 
 /**
  * Manages a full-page photo/video/error overlay
@@ -144,7 +144,7 @@ export class Overlay {
         this.setIdAndUpdateNav(id);
         this.setVisibility('spinner');
 
-        const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${id}?expand=tags,thumbnails`);
+        const r = await authFetch(`https://graph.microsoft.com/v1.0/me/drive/items/${id}?expand=tags,thumbnails`, noRetryOn429);
         if (!r.ok) {
             this.showError('Unable to retrieve from OneDrive', await r.text());
             return;

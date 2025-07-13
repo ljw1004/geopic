@@ -31,11 +31,11 @@ export function blobToDataUrl(blob) {
  *
  * This function modifies its argument in place, and also returns it for convenience.
  */
-export async function postprocessBatchResponse(response) {
+export async function postprocessBatchResponse(response, retryOn429) {
     const promises = [];
     for (const r of response.responses) {
         if (r.status === 302) { // redirect
-            promises.push(myFetch(r["headers"]["Location"]).then(async (rr) => {
+            promises.push(myFetch(r["headers"]["Location"], retryOn429).then(async (rr) => {
                 r.headers = {};
                 rr.headers.forEach((value, key) => r.headers[key] = value);
                 r.status = rr.status;
@@ -79,16 +79,35 @@ export function errorResponse(url, e) {
 }
 /**
  * Like fetch(), but failures that throw exceptions are also reported as Response errors.
+ * The retryOn429 callback is called in response to a "429 Too Many Requests" response.
+ * If it returns false, this function returns the 429 response directly.
+ * If it returns true, this function waits 2 seconds and retries the request.
  */
-export async function myFetch(url, options) {
-    try {
-        return await fetch(url, options);
-        // We must await here, since that's what allows exceptions to be caught
-        // if the fetch promise rejects.
+export async function myFetch(url, retryOn429, options) {
+    while (true) {
+        try {
+            const r = await fetch(url, options);
+            if (r.status !== 429 || !retryOn429())
+                return r;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        catch (e) {
+            return errorResponse(url, e);
+        }
     }
-    catch (e) {
-        return errorResponse(url, e);
-    }
+}
+/**
+ * A possible retryOn429 strategy, for myFetch. This one disallows retries.
+ */
+export function noRetryOn429() {
+    return false;
+}
+/**
+ * A possible retryOn429 strategy, for myFetch. This one retries indefinitely.
+ */
+export function indefinitelyRetryOn429() {
+    console.warn('429 Too Many Requests: will retry...');
+    return true;
 }
 /**
  * This fetches blobs from the given URLs. It retries upon "429 too busy", but all other result codes are returned to caller.
@@ -116,7 +135,7 @@ export async function rateLimitedBlobFetch(f, urls) {
             if (i === undefined)
                 break;
             await new Promise(resolve => setTimeout(resolve, retryDelay * 1000)); // because of invariant, we'll only delay in cases where loop executes just once
-            const fetch = myFetch(urls[i][0]).
+            const fetch = myFetch(urls[i][0], noRetryOn429).
                 then(async (r) => {
                 try {
                     if (r.ok) {
@@ -135,7 +154,7 @@ export async function rateLimitedBlobFetch(f, urls) {
             fetches.set(i, fetch);
         }
         // At this point fetches is guaranteed non-empty. (the above code only ever grew it)
-        const { i, r } = await Promise.any(fetches.values()).catch(e => { e.stack = `Promise.any() in rateLimitedBlobFetch with #fetches=${fetches.size} #queue=${queue.length}`; throw e; });
+        const { i, r } = await Promise.any(fetches.values());
         fetches.delete(i);
         // Rate-limiting adjustment (up or down) and store/retry the result
         if (r instanceof Blob) {
@@ -246,7 +265,7 @@ export async function multipartUpload(log, name, data) {
     const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB chunks (must be multiple of 320 KiB, which this is)
     const bytes = new TextEncoder().encode(data);
     const url = `https://graph.microsoft.com/v1.0/me/drive/special/approot:/${name}:/createUploadSession`;
-    const r = await authFetch(url, {
+    const r = await authFetch(url, indefinitelyRetryOn429, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -263,7 +282,7 @@ export async function multipartUpload(log, name, data) {
     const uploadUrl = (await r.json()).uploadUrl;
     for (let start = 0; start < bytes.length; start += CHUNK_SIZE) {
         const end = Math.min(start + CHUNK_SIZE, bytes.length); // exclusive
-        const r = await myFetch(uploadUrl, {
+        const r = await myFetch(uploadUrl, indefinitelyRetryOn429, {
             method: 'PUT',
             headers: {
                 'Content-Length': String(end - start),
@@ -296,7 +315,7 @@ export async function exchangeCodeForToken(CLIENT_ID, code, code_verifier) {
         grant_type: 'authorization_code'
     });
     const url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-    const response = await myFetch(url, {
+    const response = await myFetch(url, indefinitelyRetryOn429, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
@@ -336,7 +355,7 @@ const AUTH_REFRESH_SIGNAL = new AuthRefreshSignal();
  * - If this fails with 401 Unauthorized, it attempts to refresh the access token and try again.
  * - If someone else is busy doing a refresh, it waits for the refresh to finish before trying.
  */
-export async function authFetch(url, options) {
+export async function authFetch(url, retryOn429, options) {
     function f() {
         const accessToken = localStorage.getItem('access_token');
         if (!accessToken)
@@ -344,7 +363,7 @@ export async function authFetch(url, options) {
         options = options ? { ...options } : {};
         options.headers = new Headers(options.headers);
         options.headers.set('Authorization', `Bearer ${accessToken}`);
-        return myFetch(url, options);
+        return myFetch(url, retryOn429, options);
     }
     const CLIENT_ID = localStorage.getItem('client_id');
     if (!CLIENT_ID)
@@ -366,7 +385,7 @@ export async function authFetch(url, options) {
         if (!refreshToken)
             return Promise.resolve(new Response('Unauthorized: no refresh_token', { status: 401, statusText: 'Unauthorized' }));
         const url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-        const r = await myFetch(url, {
+        const r = await myFetch(url, noRetryOn429, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
