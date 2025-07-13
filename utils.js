@@ -73,18 +73,21 @@ export function formatDuration(seconds) {
  * and you want to have just a single common error handler, both for errors
  * that came from the server and for errors that came from the attempted fetch.
  */
-export function errorResponse(e) {
-    return new Response(e instanceof Error ? e.message : String(e), { status: 503, statusText: 'Cannot make request' });
+export function errorResponse(url, e) {
+    const message = `${e instanceof Error ? e.message : String(e)} (${url})`;
+    return new Response(message, { status: 503, statusText: 'Cannot make request' });
 }
 /**
  * Like fetch(), but failures that throw exceptions are also reported as Response errors.
  */
 export async function myFetch(url, options) {
     try {
-        return fetch(url, options);
+        return await fetch(url, options);
+        // We must await here, since that's what allows exceptions to be caught
+        // if the fetch promise rejects.
     }
     catch (e) {
-        return errorResponse(e);
+        return errorResponse(url, e);
     }
 }
 /**
@@ -126,7 +129,7 @@ export async function rateLimitedBlobFetch(f, urls) {
                     }
                 }
                 catch (e) {
-                    return { i, r: new FetchError(`${urls[i][0]}[rateLimitedBlobException]`, errorResponse(e), String(e)) };
+                    return { i, r: new FetchError(`${urls[i][0]}[rateLimitedBlobException]`, errorResponse(urls[i][0], e), String(e)) };
                 }
             });
             fetches.set(i, fetch);
@@ -362,7 +365,8 @@ export async function authFetch(url, options) {
         const refreshToken = localStorage.getItem('refresh_token');
         if (!refreshToken)
             return Promise.resolve(new Response('Unauthorized: no refresh_token', { status: 401, statusText: 'Unauthorized' }));
-        const r = await myFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+        const url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+        const r = await myFetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -384,7 +388,7 @@ export async function authFetch(url, options) {
         localStorage.setItem('refresh_token', tokenData.refresh_token);
     }
     catch (e) {
-        return errorResponse(e);
+        return errorResponse(url, e);
     }
     finally {
         AUTH_REFRESH_SIGNAL.signal();

@@ -334,10 +334,19 @@ function showCurrentGeodata(): void {
     TEXT_FILTER.style.display = g_geoData ? 'inline-block' : 'none';
     if (!g_geoData) return;
 
+    // Google Maps API gives us no help when the map is zoomed out far, so that 
+    // it displays multiple copies of the globe side by side, and sw.lng and ne.lng
+    // represent the longitudes of the viewport on whichever side-by-side copy of the
+    // globe they happen to lie. We have no way of knowing which copy, hence no way
+    // of knowing if we've hit this "multiple copy" situation. One approach is to
+    // guess how many degrees the current pixel width and zoom level would be at
+    // the equator, and if that's more than 360 degrees then we're pretty far zoomed out.
+    // We'll do a cheaper hack, which is to say that if the zoom level is zoomed out
+    // far enough (<= 3) then we might as well show every photo in the entire world.
     const bounds = MAP.getBounds();
     if (!bounds) return;
-    const sw = (MAP.getZoom() ?? 0) <= 2 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
-    const ne = (MAP.getZoom() ?? 0) <= 2 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
+    const sw = (MAP.getZoom() ?? 0) <= 3 ? { lat: -90, lng: -179.9999 } : { lat: bounds.getSouthWest().lat(), lng: bounds.getSouthWest().lng() };
+    const ne = (MAP.getZoom() ?? 0) <= 3 ? { lat: 90, lng: 179.9999 } : { lat: bounds.getNorthEast().lat(), lng: bounds.getNorthEast().lng() };
     const [clusters, tally] = asClusters(sw, ne, MAP.getDiv().offsetWidth, g_geoData, g_filter);
 
     const somePassFilterCount = clusters.reduce((sum, c) => sum + c.somePassFilterItems.length, 0);
@@ -428,11 +437,16 @@ export async function onIndexClick(): Promise<void> {
     } catch (e) {
         instruct(undefined);
         let details = String(e);
+        let preamble = '';
+        if (e instanceof AggregateError) {
+            preamble = `${e.message} - `;
+            e = e.errors[0];
+        }
         if (e instanceof Error) {
             const lines = e.stack?.split('\n') ?? [];
             if (lines.length > 0 && lines[0].includes(e.message)) lines.shift();
             const stack = lines.length > 0 ? ` -  - ` + lines.join(' - ') : '';
-            details = `${e.message}${stack}`;
+            details = `${preamble}${e.message}${stack}`;
         }
         OVERLAY.showError('Error! Try refreshing the page and trying again', details);
         return;

@@ -140,7 +140,8 @@ export async function indexImpl(progress, photosDriveItem) {
             progress([`[${bar}]`, folder.join('/'), s || ' ']);
         };
     }
-    let lastSuccessfulActivity = performance.now();
+    let lastSuccessfulFetch = performance.now();
+    let lastActivityLimitRefresh = 0;
     while (true) {
         const item = toProcess.shift();
         if (item && item.state === 'START') {
@@ -149,11 +150,23 @@ export async function indexImpl(progress, photosDriveItem) {
             if (childrenResult.body.error && childrenResult.body.error.code === 'activityLimitReached') {
                 await new Promise(resolve => setTimeout(resolve, 10000));
                 toProcess.unshift(item);
-                const duration = (performance.now() - lastSuccessfulActivity) / 1000;
-                log(item)(`throttling for ${duration < 300 ? Math.round(duration) + 's' : Math.round(duration / 60) + 'mins'}`);
+                const secondsSinceSuccess = Math.round((performance.now() - lastSuccessfulFetch) / 1000);
+                const secondsSinceRefresh = Math.round((performance.now() - lastActivityLimitRefresh) / 1000);
+                log(item)(`throttled for ${secondsSinceSuccess}s`);
+                // If we've been getting "activityLimitReached" for more than 2 minutes, let's try refreshing
+                // the access right now. It shouldn't work (on the grounds that I've seen "activityLimitReached"
+                // for several hours which must have encompassed at least one access token refresh).
+                // But it might work (on the grounds that reloading the browser always seems to fix it).
+                // We'll do this by currupting our access_token, so the next call to authFetch will get 401
+                // and will trigger its refresh workflow.
+                if (secondsSinceSuccess > 120 && secondsSinceRefresh > 120) {
+                    localStorage.setItem('access_token', 'TIME_TO_BLOW_THIS_JOINT');
+                    lastActivityLimitRefresh = performance.now();
+                    console.warn('activityLimitReached for more than 2 minutes; will refresh connection');
+                }
                 continue;
             }
-            lastSuccessfulActivity = performance.now();
+            lastSuccessfulFetch = performance.now();
             if (childrenResult.body.error) {
                 throw new FetchError(`${childrenResult.request.url}[child]`, new Response(childrenResult.body, { status: childrenResult.status }), JSON.stringify(childrenResult.body));
             }
@@ -244,6 +257,8 @@ export async function indexImpl(progress, photosDriveItem) {
                 thisFetch.push(item);
             }
             let batchResponse = null;
+            const blowThisJointHeaders = localStorage.getItem('access_token') === 'TIME_TO_BLOW_THIS_JOINT'
+                ? { 'Connection': 'close', 'Cache-Control': 'no-cache, no-store' } : {};
             const url = 'https://graph.microsoft.com/v1.0/$batch';
             while (true) {
                 const body = JSON.stringify({ requests });
@@ -251,6 +266,7 @@ export async function indexImpl(progress, photosDriveItem) {
                     'method': 'POST',
                     'headers': {
                         'Content-Type': 'application/json',
+                        ...blowThisJointHeaders,
                     },
                     'body': body
                 });
@@ -262,7 +278,7 @@ export async function indexImpl(progress, photosDriveItem) {
                 throw new FetchError(`${url}[POST:batch(${requests.length})]`, batchResponse, await batchResponse.text());
             const batchResult = await batchResponse.json();
             await postprocessBatchResponse(batchResult);
-            for (const r of await batchResult.responses) {
+            for (const r of batchResult.responses) {
                 const item = thisFetch.find(item => item.requests.some(req => req.id === r.id));
                 const requests = item.requests.find(req => req.id === r.id);
                 r.request = requests;
