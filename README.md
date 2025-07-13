@@ -22,8 +22,8 @@ also a full-screen button at the bottom right, and left/right buttons to either 
 Click again (or press Escape) to dismiss and go back to the map.
 
 **Search your collection**. Search for "Person" to find family photos, "Flower" for garden shots,
-"2024" to see last year's adventures, ".mov" (iPhone) or ".mp4" (Android) to find your videos.
-Search works on photo tags, folder names and filenames.
+"2024" to see last year's adventures, ".mov" (iPhone) or ".mp4" (Android) to find your videos,
+"London" to zoom the map there. Search works on photo tags, folder names, filenames, and places.
 
 **Find specific memories**. Use the timeline at the top left to jump to "that amazing week in Italy"
 or "when my kids were toddlers". Drag to select date-ranges. You can also zoom in to narrow it down.
@@ -42,12 +42,13 @@ to old photos with the free [GeoTag](https://apps.apple.com/us/app/geotag/id1465
 *Missing recent photos?* Make sure the OneDrive app on your phone has "Camera Backup" turned on,
 and is working. Sometimes it turns off by itself, for example when you upgrade your phone's version.
 
-*Keyword searches not working?* Keyword searches are only based on a photo's folder name, filename,
+*Keyword searches not working?* Keyword filters are only based on a photo's folder name, filename,
 and the AI-powered tags that OneDrive itself applied to them (and it only has a few fairly generic
-tags like Person, Fashion, Flower, Restaurant). If you search for a placename like "Paris" it won't
-work unless you deliberately named one of your folders "Paris" on OneDrive. If you search for a family
-member name like "Fred" that won't work because OneDrive doesn't use personal information in its tags.
+tags like Person, Fashion, Flower, Restaurant). If you search for a family member name like "Fred"
+that won't work because OneDrive doesn't use personal information in its tags.
 You can see what tags OneDrive chose for a photo when you enlarge it.
+When you type in a placename like "Paris" that doesn't work by keyword filters; instead it zooms
+the map to that place.
 
 *Why do photos look blurry?* To keep things fast, Geopics shows at most an 800x600 pixel version of your photos. To get full resolution, click the "Open in OneDrive" link.
 

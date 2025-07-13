@@ -224,17 +224,41 @@ async function installHandlers(): Promise<void> {
         showCurrentGeodata();
     };
 
+    // As the user types, that contributes to a text filter.
+    // If the user accepts a place suggestion, that zooms to the map and erases the filter
+    // (i.e. we treat text/places as a way to navigate, not as a way to filter).
+    // If they type more, that goes back to being a text filter.
+
     TEXT_FILTER.addEventListener('input', () => {
         if (!g_geoData) return;
         const text = TEXT_FILTER.value.trim().toLowerCase();
         g_filter.text = text ? text : undefined;
-        TEXT_FILTER.classList.toggle('filter-glow', Boolean(text));
+        TEXT_FILTER.classList.toggle('filter-glow', Boolean(g_filter.text));
         showCurrentGeodata();
     });
 
     TEXT_FILTER.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && TEXT_FILTER.value) {
             TEXT_FILTER.value = '';
+            TEXT_FILTER.dispatchEvent(new Event('input'));
+        }
+    });
+
+
+    const placesLibrary = await google.maps.importLibrary("places") as google.maps.PlacesLibrary;
+    const autocomplete = new placesLibrary.Autocomplete(TEXT_FILTER, {
+        types: ['country', 'locality', 'point_of_interest'],
+        fields: ['place_id', 'name', 'formatted_address', 'geometry']
+    });
+    autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        if (place.geometry?.location) {
+            MAP.setCenter(place.geometry.location);
+            if (place.geometry.viewport) MAP.fitBounds(place.geometry.viewport);
+            else MAP.setZoom(14);
+            TEXT_FILTER.value = '';
+            TEXT_FILTER.dispatchEvent(new Event('input'));
+        } else {
             TEXT_FILTER.dispatchEvent(new Event('input'));
         }
     });
@@ -250,7 +274,7 @@ async function installHandlers(): Promise<void> {
         else return index >= items.length - 1 ? undefined : items[index + 1];
     }
 
-    TEXT_FILTER.placeholder = 'Filter, e.g. Person or 2024/03';
+    TEXT_FILTER.placeholder = 'Filter, e.g. Paris, Person, 2024, .mov';
 
     MAP.addListener('rightclick', () => {
         const currentZoom = MAP.getZoom() ?? 1;
