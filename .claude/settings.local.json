@@ -35,7 +35,8 @@
       "Bash(for file in *.ts)",
       "Bash(do echo \"=== $file ===\")",
       "Bash(head:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(python:*)"
     ],
     "deny": []
   }

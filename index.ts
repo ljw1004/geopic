@@ -420,23 +420,27 @@ export async function onIndexClick(): Promise<void> {
         return;
     }
 
-    g_geoData = {
-        schemaVersion: 0,
-        id: '',
-        size: 0,
-        lastModifiedDateTime: '',
-        cTag: '',
-        eTag: '',
-        immediateChildCount: 0,
-        folders: [],
-        geoItems: [],
-    };
+    // We might be starting a fresh index from scratch, in which case start with a fresh temporary g_geoData
+    // while results get built up, and switch over to the finished one once they're ready
+    if (!g_geoData || g_geoData.id === 'sample-data') {
+        g_geoData = {
+            schemaVersion: 0,
+            id: 'indexing',
+            size: 0,
+            lastModifiedDateTime: '',
+            cTag: '',
+            eTag: '',
+            immediateChildCount: 0,
+            folders: [],
+            geoItems: [],
+        };
+    }
 
     function progress(update: string[] | GeoItem[]): void {
         if (update.length === 0) return;
         if (typeof update[0] === 'string') {
             document.getElementById('progress')!.textContent = [`${g_geoData!.geoItems.length} photos so far`, ...update].join('\n');
-        } else {
+        } else if (g_geoData!.id === 'indexing') {
             g_geoData!.geoItems.push(...update as GeoItem[]);
             showCurrentGeodata();
         }

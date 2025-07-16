@@ -127,6 +127,9 @@ async function resolveThumbnails(f, item) {
 /**
  * Recursive walk of all photos in the Pictures folder, reading and writing a persistent cache in OneDrive.
  * Takes ~30mins for 10 years' worth of photos.
+ *
+ * Every discovered GeoItem is sent to the callback as it's discovered.
+ * Also human-readable progress updates are sent through the callback to.
  */
 export async function indexImpl(progress, photosDriveItem) {
     const waiting = new Map();

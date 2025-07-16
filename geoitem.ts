@@ -249,6 +249,9 @@ async function resolveThumbnails(f: (s: string) => void, item: WorkItem): Promis
 /**
  * Recursive walk of all photos in the Pictures folder, reading and writing a persistent cache in OneDrive.
  * Takes ~30mins for 10 years' worth of photos.
+ * 
+ * Every discovered GeoItem is sent to the callback as it's discovered.
+ * Also human-readable progress updates are sent through the callback to.
  */
 export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, photosDriveItem: any): Promise<GeoData> {
     const waiting = new Map<string, WorkItem>();
@@ -392,7 +395,7 @@ export async function indexImpl(progress: (p: string[] | GeoItem[]) => void, pho
             const body = JSON.stringify({ requests });
             const batchResponse = await authFetch(url, indefinitelyRetryOn429, {
                 'method': 'POST',
-                'headers': {'Content-Type': 'application/json'},
+                'headers': { 'Content-Type': 'application/json' },
                 'body': body
             });
             if (!batchResponse.ok) throw new FetchError(`${url}[POST:batch(${requests.length})]`, batchResponse, await batchResponse.text());
