@@ -167,14 +167,7 @@ export class Overlay {
             else if (media.id === nextId) continue;
             this.mediaRemove(media);
         }
-        if (!this.media.has(id)) {
-            this.media.set(id, { id, element: undefined, state: 'loading', descriptionHtml: undefined });
-            this.mediaStart(id).catch(err => console.error(err));
-        }
-        if (nextId && !this.media.has(nextId)) {
-            this.media.set(nextId, { id: nextId, element: undefined, state: 'loading', descriptionHtml: undefined });
-            this.mediaStart(nextId).catch(err => console.error(err));
-        }
+        this.mediaStart(id, nextId).catch(err => console.error(err));
         this.setVisibility('media');
     }
 
@@ -185,10 +178,16 @@ export class Overlay {
         this.setIdAndUpdateNav(id, false);
         this.media.forEach(media => this.mediaRemove(media));
         this.media.clear();
-        this.media.set(id, this.mediaCreateFromDataUrl(id, url, descriptionHtml));
+        const element = document.createElement('img');
+        element.className = 'overlay-media';
+        element.src = url;
+        this.media.set(id, { id, element, descriptionHtml, state: 'loaded' });
         this.setVisibility('media');
     }
 
+    /**
+     * To hide the overlay, i.e. go back to map+histogram+thumbnails view.
+     */
     private dismiss(): void {
         if (document.fullscreenElement) document.exitFullscreen();
         this.setVisibility('dismissed');
@@ -197,10 +196,22 @@ export class Overlay {
 
 
     /**
-     * MEDIA MANAGEMENT
+     * This function will create a 'loading' media element for id if one's not already there,
+     * and once it has loaded (i.e. image has loaded or the video has started) then it'll also
+     * create a 'loading' media element for nextId too. (The reason for this delay is
+     * so that the current video's loading doesn't get slowed down by the next one's).
      */
+    async mediaStart(id: string, nextId: string | undefined): Promise<void> {
+        if (this.media.has(id)) {
+            // If 'id' is already present then we don't need to do anything.
+            // But we no longer have opportunity in its onLoad to also start nextId, so we'll do so now.
+            // Note: mediaStart() is protected against multiple people calling it for the same id,
+            // so it doesn't matter if we try to start it now and someone else was going to start it too.
+            if (nextId) this.mediaStart(nextId, undefined).catch(err => console.error(err));
+            return;
+        }
+        this.media.set(id, { id, element: undefined, state: 'loading', descriptionHtml: undefined });
 
-    async mediaStart(id: string): Promise<void> {
         const error = (html: string, text: string): void => {
             // Time might have passed, and media might no longer exist, so we have to recheck.
             const media = this.media.get(id);
@@ -227,12 +238,13 @@ export class Overlay {
             return error(mediaErrorHtml, e instanceof ErrorEvent ? e.message : typeof e === 'string' ? e : String(e));
         };
         const onLoad = (descriptionHtml: string | undefined) => {
-            // Time might have passed during media-load, so we have to recheck.
+            // Time might have passed during media loading, so we have to recheck.
             const media = this.media.get(id);
             if (!media) return;
             media.descriptionHtml = descriptionHtml;
             media.state = 'loaded';
             if (this.currentId === id) this.setVisibility('media');
+            if (nextId) this.mediaStart(nextId, undefined).catch(err => console.error(err));
         };
 
         if (driveItem.video) {
@@ -255,18 +267,11 @@ export class Overlay {
         }
     }
 
-    private mediaCreateFromDataUrl(id: string, url: string, descriptionHtml: string): MediaElement {
-        const element = document.createElement('img');
-        element.className = 'overlay-media';
-        element.src = url;
-        return {
-            id,
-            element,
-            descriptionHtml,
-            state: 'loaded',
-        };
-    }
-
+    /**
+     * This method thoroughly removes and cleans up a media element:
+     * stops it downloading anything, stops it playing if it's a video,
+     * removes it from the DOM, removes it from this.media
+     */
     private mediaRemove(media: MediaElement): void {
         if (media.element instanceof HTMLVideoElement) {
             media.element.pause();
