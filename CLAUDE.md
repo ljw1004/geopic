@@ -64,7 +64,5 @@ Coding style: All code must also be clean, documented and minimal. That means:
 
 ## TODO
 - Zoom out still isn't working
-- Browser back navigation while overlay is up should dismiss the overlay
-- left+right cursor keys to scroll overlay
 - Verify app. Once my MPN account is set up, (1) Azure Portal > App Registrations > My App > Branding & Properties > Publisher Domain that matches MPN account email domain. (2) Branding & Properties > add a verified publisher > MPN ID > verify and save.
 - Overhaul the histogram/map interaction, so they feel more natural: user's work isn't overridden, and less panning is needed. Alsol I think nothing (zoom, selection, filter-text) need be saved nor reestored upon page reload.

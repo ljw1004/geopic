@@ -63,7 +63,8 @@ export class Overlay {
             }
         };
 
-        // Navigation
+        // Navigation. If you call this function but there's no next/prev available, it's a no-op.
+        // (i.e. no need to validate before calling this).
         const navigate = (direction: 'next' | 'prev'): void => {
             if (!this.currentId) return;
             const newId = this.siblingGetter ? this.siblingGetter(this.currentId, direction) : undefined;
@@ -98,11 +99,12 @@ export class Overlay {
             }
         });
 
-        // ESC key to dismiss overlay
+        // Keyboard navigation: Esc, Left, Right
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.currentId) {
-                this.dismiss();
-            }
+            if (!this.currentId) return;
+            if (e.key === 'Escape') this.dismiss();
+            else if (e.key === 'ArrowLeft' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) navigate('prev');
+            else if (e.key === 'ArrowRight' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) navigate('next');
         });
 
         // History (back button) control: also see comment at start of setVisibility()
