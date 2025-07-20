@@ -4,6 +4,10 @@
 
 import { authFetch, escapeHtml, noRetryOn429 } from './utils.js';
 
+type State = { mode: 'dismissed' }
+    | { mode: 'media', id: string, dataUrl: undefined | { url: string, descriptionHtml: string } }
+    | { mode: 'error', messageHtml: string, detailsText: string | undefined };
+
 /**
  * Manages a full-page photo/video/error overlay
  * 
@@ -24,6 +28,7 @@ export class Overlay {
     public siblingGetter: undefined | ((id: string, direction: 'prev' | 'next') => string | undefined) = undefined;
     private currentId: string | undefined;
     private media: Map<string, MediaElement> = new Map();
+    private latestState: State = { mode: 'dismissed' };
 
     private overlay!: HTMLElement;
     private spinner!: HTMLElement;
@@ -99,9 +104,44 @@ export class Overlay {
                 this.dismiss();
             }
         });
+
+        // History (back button) control: also see comment at start of setVisibility()
+        window.addEventListener('popstate', (e) => {
+            if (e.state?.overlay && this.overlay.style.display === 'none') {
+                // User used the browser forward button, and so the overlay should be shown!
+                if (this.latestState.mode === 'media' && this.latestState.dataUrl) {
+                    this.showDataUrl(this.latestState.id, this.latestState.dataUrl.url, this.latestState.dataUrl.descriptionHtml);
+                } else if (this.latestState.mode === 'media') {
+                    this.showId(this.latestState.id);
+                } else if (this.latestState.mode === 'error') {
+                    this.showError(this.latestState.messageHtml, this.latestState.detailsText);
+                }
+            } else if (!e.state?.overlay && this.overlay.style.display !== 'none') {
+                // User used the browser backward button, and so the overlay should be hidden
+                this.dismiss();
+            }
+        });
     }
 
-    private setVisibility(mode: 'media' | 'error' | 'dismissed'): void {
+    private setVisibility(state: State): void {
+        // History (back button) control. The UI experience we want is that there are only two states
+        // in browser history: a back state without overlay, and a forward state with overlay.
+        // - If you click a thumbnail to open it, that pushes the forward state onto the browser history stack
+        // - If you dismiss the overlay by clicking on it, that pops the browser history stack
+        // - If you within the overlay you use left/right arrow or show error, that doesn't change the browser history stack
+        // - If you're at the back state and click the forward button, that goes back to the most recent overlay
+        // Therefore: the browser history state merely says whether there's an overlay (i.e. which of
+        // the two), but it's up to us to provide details about the contents of that overlay.
+        const mode = state.mode;
+        if (mode !== 'dismissed') this.latestState = state;
+        if (mode === 'dismissed') {
+            if (history.state?.overlay) history.back(); // this will remove the state from browser history, and trigger popstate
+        } else {
+            if (!history.state?.overlay) history.pushState({ overlay: true }, ''); // adds to browser history
+        }
+
+        // Update this.media: remove all elements if we're no longer showing media;
+        // otherwise start/stop video as needed, and re-trigger the show-initially animation for images.
         for (const [_, media] of this.media) {
             if (mode === 'error' || mode === 'dismissed') {
                 this.mediaRemove(media);
@@ -126,9 +166,10 @@ export class Overlay {
                 }
             }
         }
+
+        // Update visibility of all html elements, and content of image metadata
         const showImageControls = mode === 'media' && this.currentId !== undefined && this.media.get(this.currentId)?.element instanceof HTMLImageElement;
         const showSpinner = mode === 'media' && this.currentId && this.media.get(this.currentId)?.state === 'loading';
-
         this.overlay.style.display = mode === 'dismissed' ? 'none' : 'flex';
         this.spinner.style.display = showSpinner ? 'block' : 'none';
         this.errorDiv.style.display = mode === 'error' ? 'flex' : 'none';
@@ -149,7 +190,7 @@ export class Overlay {
      * Shows an error icon with message.
      */
     public showError(messageHtml: string, detailsText: string | undefined): void {
-        this.setVisibility('error');
+        this.setVisibility({ mode: 'error', messageHtml, detailsText });
         const detailsHtml = detailsText ? `<br/><br/>${detailsText.split(' - ').map(escapeHtml).join('<br/>')}` : '';
         this.errorText.innerHTML = messageHtml + detailsHtml;
     }
@@ -168,7 +209,7 @@ export class Overlay {
             this.mediaRemove(media);
         }
         this.mediaStart(id, nextId).catch(err => console.error(err));
-        this.setVisibility('media');
+        this.setVisibility({ mode: 'media', id, dataUrl: undefined });
     }
 
     /**
@@ -182,7 +223,7 @@ export class Overlay {
         element.className = 'overlay-media';
         element.src = url;
         this.media.set(id, { id, element, descriptionHtml, state: 'loaded' });
-        this.setVisibility('media');
+        this.setVisibility({ mode: 'media', id, dataUrl: { url, descriptionHtml } });
     }
 
     /**
@@ -190,7 +231,7 @@ export class Overlay {
      */
     private dismiss(): void {
         if (document.fullscreenElement) document.exitFullscreen();
-        this.setVisibility('dismissed');
+        this.setVisibility({ mode: 'dismissed' });
         this.setIdAndUpdateNav(undefined);
     }
 
@@ -243,7 +284,7 @@ export class Overlay {
             if (!media) return;
             media.descriptionHtml = descriptionHtml;
             media.state = 'loaded';
-            if (this.currentId === id) this.setVisibility('media');
+            if (this.currentId === id) this.setVisibility({ mode: 'media', id, dataUrl: undefined });
             if (nextId) this.mediaStart(nextId, undefined).catch(err => console.error(err));
         };
 

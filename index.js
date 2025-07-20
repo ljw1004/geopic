@@ -354,7 +354,7 @@ function showCurrentGeodata() {
     const totalPassFilterCount = clusters.reduce((sum, c) => sum + c.totalPassFilterItems, 0);
     function showItem(item) {
         if (g_geoData?.id === 'sample-data')
-            OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h2>HIGH QUALITY ONLY FOR YOUR ONEDRIVE PHOTOS</h2> ${escapeHtml(item.name)}`);
+            OVERLAY.showDataUrl(item.id, item.thumbnailUrl, `<h2>HIGH QUALITY ONLY FOR YOUR OWN ONEDRIVE PHOTOS</h2> ${escapeHtml(item.name)}`);
         else
             OVERLAY.showId(item.id);
     }
