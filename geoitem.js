@@ -325,7 +325,7 @@ export function asClusters(sw, ne, pixelWidth, geoData, filter) {
     const MAX_ITEMS_PER_TILE = 40;
     const tileSize = ((ne.lng - sw.lng + 360) % 360 || 360) / Math.max(1, Math.round(pixelWidth / TILE_SIZE_PX));
     const swSnap = { lat: Math.floor(sw.lat / tileSize) * tileSize, lng: lngWrap((Math.floor(sw.lng / tileSize) * tileSize)) };
-    const realWidth = (ne.lng - sw.lng + 360) % 360;
+    const realWidth = (ne.lng - sw.lng + 360) % 360 || 360; // the ||360 is to handle -180 to +180, which is width of 360 not 0
     const snapWidth = (ne.lng - swSnap.lng + 360) % 360; // this might have snapped westwards but gone right past ne.lng!
     const numTilesX = Math.ceil((snapWidth < realWidth ? snapWidth + 360 : snapWidth) / tileSize);
     const numTilesY = Math.ceil((ne.lat - swSnap.lat) / tileSize);
