@@ -330,9 +330,9 @@ export async function onLoginClick(): Promise<void> {
         client_id: CLIENT_ID,
         response_type: 'code',
         redirect_uri: window.location.origin + window.location.pathname,
-        scope: 'files.readwrite offline_access',
+        scope: 'files.read offline_access',
         code_challenge,
-        code_challenge_method: 'S256',
+        code_challenge_method: 'S256', // means that code_challenge is a SHA256 hash of the code_verifier value, base64url
         state: 'index'
     });
     location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
